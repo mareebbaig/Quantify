@@ -7,6 +7,7 @@ from brevitas.core.function_wrapper import TensorClamp
 from brevitas.core.scaling import ParameterScaling
 from brevitas.core.scaling import SCALAR_SHAPE
 from brevitas.core.zero_point import ZeroZeroPoint
+from brevitas.proxy import WeightQuantProxyFromInjector
 
 # Quantizer 1: Fixed-point per-tensor weight quantizer
 # Using Brevitas ExtendedInjector pattern
@@ -32,3 +33,5 @@ class Quantizer1(ExtendedInjector):
     scaling_impl = ParameterScaling
     scaling_shape = SCALAR_SHAPE
     scaling_min_val = 1e-10
+    # Required for Brevitas injector pattern
+    proxy_class = WeightQuantProxyFromInjector
