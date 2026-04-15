@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from brevitas.quant.base import *
 from brevitas.core.scaling import ParameterFromStatsFromParameterScaling
+from brevitas.inject import ExtendedInjector
 from brevitas.inject.enum import ScalingImplType, BitWidthImplType, FloatToIntImplType, QuantType, ScalingPerOutputType, RestrictValueType
 from brevitas.proxy import WeightQuantProxyFromInjector
 
