@@ -4,6 +4,9 @@ from brevitas.quant.base import *
 from brevitas.core.scaling import ParameterFromStatsFromParameterScaling
 from brevitas.inject import ExtendedInjector
 from brevitas.inject.enum import ScalingImplType, BitWidthImplType, FloatToIntImplType, QuantType, ScalingPerOutputType, RestrictValueType
+from brevitas.core.function_wrapper import TensorClamp, Identity
+from brevitas.core.scaling import SCALAR_SHAPE
+from brevitas.core.zero_point import ZeroZeroPoint
 from brevitas.proxy import WeightQuantProxyFromInjector
 
 # Quantizer 1: Fixed-point per-tensor weight quantizer
