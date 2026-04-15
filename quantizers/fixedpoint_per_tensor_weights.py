@@ -8,6 +8,7 @@ from brevitas.core.function_wrapper import TensorClamp, Identity
 from brevitas.core.scaling import SCALAR_SHAPE
 from brevitas.core.zero_point import ZeroZeroPoint
 from brevitas.proxy import WeightQuantProxyFromInjector
+from brevitas.core.quant import IntQuant
 
 # Quantizer 1: Fixed-point per-tensor weight quantizer
 # Following Brevitas pattern by inheriting from a proper base class
@@ -39,3 +40,6 @@ class Quantizer1(ExtendedInjector):
     input_view_impl = Identity
     # Required for proper initialization
     stats_reduce_dim = None
+    
+    # Provide the tensor_quant attribute that Brevitas requires
+    tensor_quant = IntQuant
