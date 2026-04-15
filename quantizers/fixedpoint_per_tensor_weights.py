@@ -1,22 +1,30 @@
 import torch
 import torch.nn as nn
-from brevitas.quant.scaled_int import Int8WeightPerTensorFloat
-from brevitas.inject import value
+from brevitas.quant.base import *
+from brevitas.inject import ExtendedInjector, value
 from brevitas.inject.enum import ScalingImplType, BitWidthImplType, FloatToIntImplType, QuantType
 
 # Quantizer 1: Fixed-point per-tensor weight quantizer
-# Using existing Brevitas quantizer as base
-class Quantizer1(Int8WeightPerTensorFloat):
+# Using Brevitas ExtendedInjector pattern
+class Quantizer1(ExtendedInjector):
     """
     Quantizer 1 implementation as a Brevitas QuantType.
     This is a fixed-point per-tensor weight quantizer.
     """
     
-    # Override to use fixed-point instead of floating-point
-    # This creates a fixed-point quantizer with 8-bit precision
+    # Define the quantizer properties using Brevitas injector pattern
+    quant_type = QuantType.INT
     bit_width = 8
-    scaling_impl_type = ScalingImplType.PARAMETER
-    signed = True
-    narrow_range = True
     bit_width_impl_type = BitWidthImplType.CONST
     float_to_int_impl_type = FloatToIntImplType.ROUND
+    narrow_range = True
+    signed = True
+    scaling_impl_type = ScalingImplType.PARAMETER
+    scaling_per_output_type = ScalingPerOutputType.TENSOR
+    restrict_scaling_type = RestrictValueType.FP
+    tensor_clamp_impl = TensorClamp
+    zero_point_impl = ZeroZeroPoint
+    # Use a fixed-point scaling implementation
+    scaling_impl = ParameterScaling
+    scaling_shape = SCALAR_SHAPE
+    scaling_min_val = 1e-10

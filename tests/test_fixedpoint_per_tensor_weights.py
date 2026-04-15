@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from quantizers.fixedpoint_per_tensor_weights import Quantizer1
+from brevitas.proxy import WeightQuantProxyFromInjector
 
 def test_quantizer1_linear_forward():
     """
@@ -10,16 +11,13 @@ def test_quantizer1_linear_forward():
     # Create a linear layer
     linear_layer = nn.Linear(64, 32)
     
-    # Create quantizer instance (this should work now)
+    # Create quantizer instance using Brevitas injector pattern
+    # This is the correct way to instantiate Brevitas quantizers
     quantizer = Quantizer1()
     
-    # Get the original weights
-    original_weights = linear_layer.weight.data
-    
-    # Apply quantization to the weights
-    # Note: In Brevitas, quantization is typically done through proxies
-    # For testing purposes, we'll check that the quantizer can be instantiated
-    # and has the expected properties
+    # Create a weight quantization proxy using the quantizer
+    # This properly integrates the quantizer with the linear layer
+    weight_quant_proxy = WeightQuantProxyFromInjector(quantizer, weight=linear_layer.weight)
     
     # Check that the quantizer has the correct bit width
     assert quantizer.bit_width == 8, f"Expected bit_width 8, got {quantizer.bit_width}"
