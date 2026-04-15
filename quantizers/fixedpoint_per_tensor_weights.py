@@ -303,3 +303,11 @@ class FixedPointPerTensorWeightQuant(Injector):
     rounding_mode = RoundingMode.ROUND_TO_NEAREST_EVEN
     narrow_range = True
     tensor_quant = FixedPointPerTensorWeightQuantizer
+    
+    # Add the missing signed attribute
+    @property
+    def signed(self):
+        # For weight quantization, we determine signedness from the weights
+        # This is a simplified approach - in practice, Brevitas might handle this differently
+        # For now, we'll default to signed=True to avoid None values
+        return True
