@@ -14,8 +14,10 @@ class Quantizer1(IntQuant):
     # Define the quantization type as weight quantization
     quant_type = QuantType.INT
     
-    # Set the bit width for the quantizer
-    bit_width = value(8)
+    # Set the bit width for the quantizer using value injector
+    @value
+    def bit_width():
+        return 8
     
     # Set the scaling factor to be learned during training
     scaling_impl_type = ScalingImplType.PARAMETER
