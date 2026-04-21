@@ -24,20 +24,25 @@ class FixedPointCNN(nn.Module):
         
         self.features = nn.Sequential(
             # Layer 1: Conv -> ReLU -> MaxPool
-            QuantConv2d(1, 16, kernel_size=3, stride=1, padding=1, weight_quant=weight_quant),
+            QuantConv2d(1, 16, kernel_size=3, stride=2, padding=1, weight_quant=weight_quant),
             QuantReLU(),
-            nn.MaxPool2d(kernel_size=2),
+            QuantConv2d(16, 32, kernel_size=3, stride=2, padding=1, weight_quant=weight_quant),
+            QuantReLU(),
+            #nn.MaxPool2d(kernel_size=2),
             
             # Layer 2: Conv -> ReLU -> MaxPool
-            QuantConv2d(16, 32, kernel_size=3, stride=1, padding=1, weight_quant=weight_quant),
+            QuantConv2d(32, 64, kernel_size=3, stride=2, padding=1, weight_quant=weight_quant),
             QuantReLU(),
-            nn.MaxPool2d(kernel_size=2),
+            #nn.MaxPool2d(kernel_size=2),
+            #QuantConv2d(64, 64, kernel_size=3, stride=2, padding=0, weight_quant=weight_quant),
+            #QuantReLU(),
+            #QuantConv2d(64, 64, kernel_size=3, stride=2, padding=0, weight_quant=weight_quant),
         )
         
         self.classifier = nn.Sequential(
-            QuantLinear(32 * 7 * 7, 128, weight_quant=weight_quant),
-            QuantReLU(),
-            QuantLinear(128, 10, weight_quant=weight_quant),
+            QuantLinear(64*4*4, 10, weight_quant=weight_quant),
+            #QuantReLU(),
+            #QuantLinear(128, 10, weight_quant=weight_quant),
         )
 
     def forward(self, x):
@@ -101,9 +106,9 @@ def test(model, device, test_loader, criterion):
 
 def main():
     # Hyperparameters
-    batch_size = 64
+    batch_size = 512
     epochs = 5
-    lr = 0.01
+    lr = 0.001
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
