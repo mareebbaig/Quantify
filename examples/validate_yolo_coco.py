@@ -60,7 +60,7 @@ def main(args):
     # ---------------- data ----------------
     print("Loading COCO validation set from Hugging Face...")
     # Note: 'coco' dataset on HF contains 'image' and 'objects' (bboxes and categories)
-    dataset = load_dataset("coco", split="validation", trust_remote_code=True)
+    dataset = load_dataset("detection-datasets/coco", split="validation", trust_remote_code=True)
 
     # ---------------- validation loop ----------------
     log_path = ws.logs / "yolo_coco_val_log.csv"
