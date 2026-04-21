@@ -257,9 +257,9 @@ def main(args):
 
     # ---------------- training loop ----------------
     best_acc = 0.0
-    best_ckpt = ws.checkpoints / "best.pt"
-    last_ckpt = ws.checkpoints / "last.pt"
-    log_path  = ws.logs / "training_log.csv"
+    best_ckpt = ws.checkpoints / "best_float.pt"
+    last_ckpt = ws.checkpoints / "last_float.pt"
+    log_path  = ws.logs / "training_log_float.csv"
 
     with CSVLogger(log_path,
                    fieldnames=["epoch", "lr",

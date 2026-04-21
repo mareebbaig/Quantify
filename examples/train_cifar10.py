@@ -303,11 +303,15 @@ def main(args):
                      act_bit_width=args.act_bits).to(device)
 
     if args.pretrained:
-        print(f"Loading pretrained weights from: {args.pretrained}")
-        state_dict = torch.load(args.pretrained, map_location=device)
-        # strict=False is used because the float model lacks quantization parameters
-        # and has slightly different attribute names (e.g. self.inp vs self.quant_inp)
-        model.load_state_dict(state_dict, strict=False)
+        pretrained_path = args.pretrained
+    else:
+        pretrained_path = ws.checkpoints / "best_float.pt"
+
+    print(f"Loading pretrained weights from: {args.pretrained}")
+    state_dict = torch.load(args.pretrained, map_location=device)
+    # strict=False is used because the float model lacks quantization parameters
+    # and has slightly different attribute names (e.g. self.inp vs self.quant_inp)
+    model.load_state_dict(state_dict, strict=False)
 
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model:     {n_params / 1e6:.2f}M params "
