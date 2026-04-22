@@ -122,18 +122,19 @@ def main(args):
     # ---------------- model ----------------
     model = QuantMobileNetCIFAR(num_classes=10,
                      weight_bit_width=args.weight_bits,
-                     act_bit_width=args.act_bits).to(device)
+                     act_bit_width=args.act_bits).to("cpu")
 
     if args.pretrained:
         pretrained_path = args.pretrained
     else:
         pretrained_path = ws.checkpoints / "best_float.pt"
+    pretrained_path = "/home/th/tmp/quanttests/cifar10_vgg_float/checkpoints/best_float.pt"  # ws.checkpoints / "best_float.pt"
 
     print(f"Loading pretrained weights from: {pretrained_path}")
-    state_dict = torch.load(pretrained_path, map_location=device)
-    # strict=False is used because the float model lacks quantization parameters
-    # and has slightly different attribute names (e.g. self.inp vs self.quant_inp)
+    state_dict = torch.load(pretrained_path, map_location="cpu")
     model.load_state_dict(state_dict, strict=False)
+
+    model = model.to(device)
 
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model:     {n_params / 1e6:.2f}M params "
@@ -142,11 +143,8 @@ def main(args):
 
     # ---------------- optimizer ----------------
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(model.parameters(),
-                          lr=args.lr, momentum=args.momentum,
-                          weight_decay=args.weight_decay, nesterov=True)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer,
-                                                     T_max=args.epochs)
+    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
     # ---------------- training loop ----------------
     best_acc = 0.0

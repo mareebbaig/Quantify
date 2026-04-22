@@ -57,9 +57,8 @@ class DepthwiseSeparableBlock(nn.Module):
             in_ch, in_ch, kernel_size=3, stride=stride, padding=1,
             groups=in_ch, bias=True,
             weight_bit_width=weight_bit_width)
-        #self.bn_dw = nn.BatchNorm2d(in_ch)
-        # self.relu_dw = qnn.QuantReLU(bit_width=act_bit_width)
-        self.relu_dw = nn.ReLU()
+        self.bn_dw = nn.BatchNorm2d(in_ch)
+        self.relu_dw = qnn.QuantReLU(bit_width=act_bit_width)
 
 
 
@@ -67,15 +66,12 @@ class DepthwiseSeparableBlock(nn.Module):
         self.pw = qnn.QuantConv2d(
             in_ch, out_ch, kernel_size=1, bias=True,
             weight_bit_width=weight_bit_width)
-        #self.bn_pw = nn.BatchNorm2d(out_ch)
-        # self.relu_pw = qnn.QuantReLU(bit_width=act_bit_width)
-        self.relu_pw = nn.ReLU()
+        self.bn_pw = nn.BatchNorm2d(out_ch)
+        self.relu_pw = qnn.QuantReLU(bit_width=act_bit_width)
 
     def forward(self, x):
-        # x = self.relu_dw(self.bn_dw(self.dw(x)))
-        # x = self.relu_pw(self.bn_pw(self.pw(x)))
-        x = self.relu_dw(self.dw(x))
-        x = self.relu_pw(self.pw(x))
+        x = self.relu_dw(self.bn_dw(self.dw(x)))
+        x = self.relu_pw(self.bn_pw(self.pw(x)))
         return x
 
 class QuantMobileNetCIFAR(nn.Module):
@@ -110,7 +106,7 @@ class QuantMobileNetCIFAR(nn.Module):
         self.stem = nn.Sequential(
             qnn.QuantConv2d(3, 32, kernel_size=3, padding=1, bias=True,
                             weight_bit_width=weight_bit_width),
-            #nn.BatchNorm2d(32),
+            nn.BatchNorm2d(32),
             qnn.QuantReLU(bit_width=act_bit_width),
         )
 
@@ -122,17 +118,11 @@ class QuantMobileNetCIFAR(nn.Module):
             in_ch = out_ch
         self.blocks = nn.Sequential(*blocks)
 
-        #self.head = nn.Sequential(
-        #    nn.AdaptiveAvgPool2d(1),
-        #    nn.Flatten(),
-        #    qnn.QuantLinear(in_ch, num_classes, bias=True,
-        #                    weight_bit_width=weight_bit_width),
-        #)
-
         self.head = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),
-            nn.Flatten(),
-            nn.Linear(in_ch, num_classes, bias=True),
+           nn.AdaptiveAvgPool2d(1),
+           nn.Flatten(),
+           qnn.QuantLinear(in_ch, num_classes, bias=True,
+                           weight_bit_width=weight_bit_width),
         )
 
     def forward(self, x):
@@ -193,7 +183,7 @@ class QuantVGG(nn.Module):
         return [
             qnn.QuantConv2d(in_ch, out_ch, kernel_size=3, padding=1,
                             bias=False, weight_bit_width=w_bits),
-            #nn.BatchNorm2d(out_ch),
+            nn.BatchNorm2d(out_ch),
             qnn.QuantReLU(bit_width=a_bits),
         ]
 
