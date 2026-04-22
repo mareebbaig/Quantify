@@ -22,14 +22,39 @@ import torchvision
 import torchvision.transforms as transforms
 
 import brevitas.nn as qnn
+from brevitas.inject.enum import FloatToIntImplType
 
 from utils import add_workspace_args, workspace_from_args, summarize_parameters
 from models.cifar10_quant import QuantMobileNetCIFAR
 
 
+# Mapping from CLI string to Brevitas FloatToIntImplType
+ROUNDING_MAP = {
+    "round": FloatToIntImplType.ROUND,
+    "floor": FloatToIntImplType.FLOOR,
+    "ceil": FloatToIntImplType.CEIL,
+    "round_to_zero": FloatToIntImplType.ROUND_TO_ZERO,
+    "dpu": FloatToIntImplType.DPU,
+    "learned_round": FloatToIntImplType.LEARNED_ROUND,
+    "stochastic_round": FloatToIntImplType.STOCHASTIC_ROUND,
+}
+
+
 # --------------------------------------------------------------------
-# Evaluation helper
+# Helpers
 # --------------------------------------------------------------------
+def set_rounding_mode(model, rounding_mode):
+    """
+    Iterate through all modules in the model and set the rounding mode
+    for any quantizers found.
+    """
+    for m in model.modules():
+        if hasattr(m, 'weight_quant') and m.weight_quant is not None:
+            m.weight_quant.float_to_int_impl_type = rounding_mode
+        if hasattr(m, 'act_quant') and m.act_quant is not None:
+            m.act_quant.float_to_int_impl_type = rounding_mode
+
+
 @torch.no_grad()
 def evaluate(model, loader, criterion, device):
     model.eval()
@@ -58,6 +83,9 @@ def parse_args():
                    help="Path to pretrained floating-point model checkpoint")
     p.add_argument("--calib-batches", type=int,  default=10,
                    help="Number of batches to use for activation calibration")
+    p.add_argument("--rounding",     type=str,   default="round",
+                   choices=list(ROUNDING_MAP.keys()),
+                   help="Rounding technique for quantization")
     return p.parse_args()
 
 
@@ -102,6 +130,11 @@ def main(args):
     model = QuantMobileNetCIFAR(num_classes=10,
                      weight_bit_width=args.weight_bits,
                      act_bit_width=args.act_bits).to(device)
+
+    # Apply selected rounding mode
+    rounding_mode = ROUNDING_MAP[args.rounding]
+    set_rounding_mode(model, rounding_mode)
+    print(f"Rounding mode: {args.rounding}")
 
     if args.pretrained:
         pretrained_path = args.pretrained
