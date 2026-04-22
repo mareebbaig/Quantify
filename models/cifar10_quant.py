@@ -1,5 +1,36 @@
 import torch.nn as nn
 import brevitas.nn as qnn
+import torch.nn as nn
+
+
+class DepthwiseSeparableBlockFloat(nn.Module):
+    """Depthwise 3x3 (BN, ReLU) followed by pointwise 1x1 (BN, ReLU).
+
+    Stride is applied on the depthwise conv, which is also where
+    spatial downsampling happens.
+    """
+
+    def __init__(self, in_ch: int, out_ch: int, stride: int,
+                  weight_bit_width: int, act_bit_width: int):
+        super().__init__()
+
+        # Depthwise: one 3x3 filter per input channel (groups == in_ch).
+        self.dw = nn.Conv2d(
+            in_ch, in_ch, kernel_size=3, stride=stride, padding=1,
+            groups=in_ch, bias=True)
+        #self.bn_dw = nn.BatchNorm2d(in_ch)
+        self.relu_dw = nn.ReLU()
+
+        # Pointwise: 1x1 conv mixing the channels.
+        self.pw = nn.Conv2d(
+            in_ch, out_ch, kernel_size=1, bias=True)
+        #self.bn_pw = nn.BatchNorm2d(out_ch)
+        self.relu_pw = nn.ReLU()
+
+    def forward(self, x):
+        x = self.relu_dw(self.bn_dw(self.dw(x)))
+        x = self.relu_pw(self.bn_pw(self.pw(x)))
+        return x
 
 class DepthwiseSeparableBlock(nn.Module):
     """Depthwise 3x3 (BN, ReLU) followed by pointwise 1x1 (BN, ReLU).
@@ -24,21 +55,27 @@ class DepthwiseSeparableBlock(nn.Module):
         # Depthwise: one 3x3 filter per input channel (groups == in_ch).
         self.dw = qnn.QuantConv2d(
             in_ch, in_ch, kernel_size=3, stride=stride, padding=1,
-            groups=in_ch, bias=False,
+            groups=in_ch, bias=True,
             weight_bit_width=weight_bit_width)
-        self.bn_dw = nn.BatchNorm2d(in_ch)
-        self.relu_dw = qnn.QuantReLU(bit_width=act_bit_width)
+        #self.bn_dw = nn.BatchNorm2d(in_ch)
+        # self.relu_dw = qnn.QuantReLU(bit_width=act_bit_width)
+        self.relu_dw = nn.ReLU()
+
+
 
         # Pointwise: 1x1 conv mixing the channels.
         self.pw = qnn.QuantConv2d(
-            in_ch, out_ch, kernel_size=1, bias=False,
+            in_ch, out_ch, kernel_size=1, bias=True,
             weight_bit_width=weight_bit_width)
-        self.bn_pw = nn.BatchNorm2d(out_ch)
-        self.relu_pw = qnn.QuantReLU(bit_width=act_bit_width)
+        #self.bn_pw = nn.BatchNorm2d(out_ch)
+        # self.relu_pw = qnn.QuantReLU(bit_width=act_bit_width)
+        self.relu_pw = nn.ReLU()
 
     def forward(self, x):
-        x = self.relu_dw(self.bn_dw(self.dw(x)))
-        x = self.relu_pw(self.bn_pw(self.pw(x)))
+        # x = self.relu_dw(self.bn_dw(self.dw(x)))
+        # x = self.relu_pw(self.bn_pw(self.pw(x)))
+        x = self.relu_dw(self.dw(x))
+        x = self.relu_pw(self.pw(x))
         return x
 
 class QuantMobileNetCIFAR(nn.Module):
@@ -52,8 +89,8 @@ class QuantMobileNetCIFAR(nn.Module):
     # (out_channels, stride) for each depthwise-separable block.
     BLOCK_CFG = [
         (16, 1),
-        (32, 2), # 32 -> 16
-        (32, 1),
+        (64, 1),
+        (32, 2),# 32 -> 16
         (64, 2), # 16 -> 8
         (128, 2),  # 8 ->  4
         (128, 2),  # 4 ->  2
@@ -67,14 +104,15 @@ class QuantMobileNetCIFAR(nn.Module):
         super().__init__()
 
         self.quant_inp = qnn.QuantIdentity(bit_width=act_bit_width,
-                                           return_quant_tensor=False)
+                                            return_quant_tensor=False)
+        #self.quant_inp = nn.Identity()
 
         # Standard 3x3 stem conv — first layer is usually kept dense
         # (no depthwise) because it has only 3 input channels.
         self.stem = nn.Sequential(
-            qnn.QuantConv2d(3, 32, kernel_size=3, padding=1, bias=False,
+            qnn.QuantConv2d(3, 32, kernel_size=3, padding=1, bias=True,
                             weight_bit_width=weight_bit_width),
-            nn.BatchNorm2d(32),
+            #nn.BatchNorm2d(32),
             qnn.QuantReLU(bit_width=act_bit_width),
         )
 
@@ -86,11 +124,17 @@ class QuantMobileNetCIFAR(nn.Module):
             in_ch = out_ch
         self.blocks = nn.Sequential(*blocks)
 
+        #self.head = nn.Sequential(
+        #    nn.AdaptiveAvgPool2d(1),
+        #    nn.Flatten(),
+        #    qnn.QuantLinear(in_ch, num_classes, bias=True,
+        #                    weight_bit_width=weight_bit_width),
+        #)
+
         self.head = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
             nn.Flatten(),
-            qnn.QuantLinear(in_ch, num_classes, bias=True,
-                            weight_bit_width=weight_bit_width),
+            nn.Linear(in_ch, num_classes, bias=True),
         )
 
     def forward(self, x):
@@ -152,7 +196,7 @@ class QuantVGG(nn.Module):
         return [
             qnn.QuantConv2d(in_ch, out_ch, kernel_size=3, padding=1,
                             bias=False, weight_bit_width=w_bits),
-            nn.BatchNorm2d(out_ch),
+            #nn.BatchNorm2d(out_ch),
             qnn.QuantReLU(bit_width=a_bits),
         ]
 
