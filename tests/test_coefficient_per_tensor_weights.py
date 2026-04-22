@@ -86,9 +86,9 @@ class TestCoefficientQuantizer(unittest.TestCase):
         # Forward pass should trigger the search in the internal quantizer
         _ = layer(torch.randn(1, 10))
         
-        # In Brevitas, the weight quantizer is instantiated and stored in the layer
-        # We check if the search was performed on the weight quantizer module
-        self.assertTrue(layer.weight_quant.search_done.item())
+        # In Brevitas, the weight quantizer is instantiated as a proxy.
+        # The actual quantizer module is stored in the tensor_quant attribute.
+        self.assertTrue(layer.weight_quant.tensor_quant.search_done.item())
 
     def test_all_zeros(self):
         """Test behavior with all-zero weights."""
