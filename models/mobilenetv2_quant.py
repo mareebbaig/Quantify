@@ -4,7 +4,10 @@ import brevitas.nn as qnn
 from quantizers.fixedpoint_per_tensor_weights import FixedPointPerTensorWeightQuant
 
 class QuantInvertedResidual(nn.Module):
-    """Quantized Inverted Residual Block for MobileNetV2."""
+    """Quantized Inverted Residual Block for MobileNetV2.
+    
+    Mirrors torchvision.models.mobilenetv2._InvertedResidual.
+    """
     def __init__(self, inp, oup, stride, expand_ratio, weight_bit_width, act_bit_width, weight_quant):
         super().__init__()
         self.stride = stride
@@ -12,7 +15,15 @@ class QuantInvertedResidual(nn.Module):
 
         hidden_dim = int(round(inp * expand_ratio))
         
-        # Expansion
+        # The 'conv' attribute in torchvision is a Sequential containing:
+        # 0: Conv2d (pw)
+        # 1: BatchNorm2d
+        # 2: ReLU6
+        # 3: Conv2d (dw)
+        # 4: BatchNorm2d
+        # 5: ReLU6
+        # 6: Conv2d (pw-linear)
+        # 7: BatchNorm2d
         self.conv = nn.Sequential(
             # pw
             qnn.QuantConv2d(inp, hidden_dim, 1, 1, 0, bias=False, 
@@ -49,45 +60,37 @@ class QuantMobileNetV2(nn.Module):
         class FixedPointWeightQuant(FixedPointPerTensorWeightQuant):
             bit_width = weight_bit_width
 
-        # MobileNetV2 Config: (expand_ratio, channels, stride)
+        # Official MobileNetV2 Config: (expand_ratio, channels, num_blocks, stride)
         self.config = [
-            # t:.relu, type:Conv, stride:1
-            (1, 16, 1),
-            # t:.relu, type:InvertedResidual, stride:1, expand_ratio:1
-            (1, 24, 2),
-            (2, 32, 1),
-            (3, 64, 2),
-            (4, 96, 1),
-            (5, 160, 2),
-            (6, 160, 1),
-            (6, 160, 1),
-            (6, 160, 2),
-            (6, 160, 1),
-            (6, 160, 1),
-            (6, 160, 2),
-            (6, 160, 1),
-            (6, 160, 1),
-            (6, 160, 2),
-            (6, 160, 1),
-            (6, 160, 1),
+            [1, 16, 1, 1],
+            [6, 24, 2, 2],
+            [6, 32, 3, 1],
+            [6, 64, 4, 2],
+            [6, 96, 3, 1],
+            [6, 160, 3, 2],
+            [6, 160, 1, 1],
         ]
 
         # Stem
-        self.features = [
+        self.features = []
+        self.features.append(
             qnn.QuantConv2d(3, 32, 3, 2, 1, bias=False, 
-                            weight_bit_width=weight_bit_width, weight_quant=FixedPointWeightQuant),
-            nn.BatchNorm2d(32),
-            qnn.QuantReLU(bit_width=act_bit_width),
-        ]
+                            weight_bit_width=weight_bit_width, weight_quant=FixedPointWeightQuant)
+        )
+        self.features.append(nn.BatchNorm2d(32))
+        self.features.append(qnn.QuantReLU(bit_width=act_bit_width))
 
         # Inverted Residual Blocks
         in_channels = 32
-        for exp, out_channels, stride in self.config:
-            self.features.append(
-                QuantInvertedResidual(in_channels, out_channels, stride, exp, 
-                                      weight_bit_width, act_bit_width, FixedPointWeightQuant)
-            )
-            in_channels = out_channels
+        for t, c, n, s in self.config:
+            for i in range(n):
+                # Only the first block of each group uses the specified stride
+                stride = s if i == 0 else 1
+                self.features.append(
+                    QuantInvertedResidual(in_channels, c, stride, t, 
+                                           weight_bit_width, act_bit_width, FixedPointWeightQuant)
+                )
+                in_channels = c
 
         # Final Conv layer
         self.features.append(
