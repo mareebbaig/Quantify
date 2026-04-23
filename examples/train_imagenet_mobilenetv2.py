@@ -20,6 +20,7 @@ from datasets import load_dataset
 
 from utils import add_workspace_args, workspace_from_args
 from utils.logging import CSVLogger
+from tqdm import tqdm
 
 
 class HFDatasetWrapper(Dataset):
@@ -42,7 +43,7 @@ def train_one_epoch(model, loader, optimizer, criterion, device):
     model.train()
     running_loss, correct, total = 0.0, 0, 0
     
-    for inputs, targets in loader:
+    for inputs, targets in tqdm(loader):
         inputs, targets = inputs.to(device), targets.to(device)
         
         optimizer.zero_grad()
