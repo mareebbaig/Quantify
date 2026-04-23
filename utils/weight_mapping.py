@@ -19,7 +19,11 @@ def load_pretrained_weights(quant_model: nn.Module, float_model: nn.Module):
             target_shape = quant_state_dict[k].shape
             # Auto-reshape flattened depthwise conv weights (1D -> 4D)
             if v.dim() == 1 and len(target_shape) == 4:
-                v = v.reshape(target_shape)
+                if v.numel() == target_shape.numel():
+                    v = v.reshape(target_shape)
+                else:
+                    logging.warning(f"Skipping {k}: size mismatch ({v.numel()} vs {target_shape.numel()})")
+                    continue
             filtered_dict[k] = v
 
     missing_keys, unexpected_keys = quant_model.load_state_dict(filtered_dict, strict=False)
