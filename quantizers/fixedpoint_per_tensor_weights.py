@@ -254,6 +254,14 @@ class FixedPointPerTensorWeightQuantizer(nn.Module):
         bit_width : torch.Tensor
             The bit-width as a float tensor.
         """
+        # Ensure internal state buffers are on the same device as the input weights.
+        # Brevitas instantiates quantizers lazily, so these buffers may remain on CPU
+        # even after model.to(device) is called.
+        if self.search_done.device != weights.device:
+            self.search_done = self.search_done.to(weights.device)
+            self.search_result_is_signed = self.search_result_is_signed.to(weights.device)
+            self.search_result_lsb = self.search_result_lsb.to(weights.device)
+
         if not self.search_done.item():
             signed = self.detect_signed(weights)
 
