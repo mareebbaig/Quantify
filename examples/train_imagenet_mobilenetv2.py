@@ -43,7 +43,8 @@ def train_one_epoch(model, loader, optimizer, criterion, device):
     model.train()
     running_loss, correct, total = 0.0, 0, 0
     
-    for inputs, targets in tqdm(loader):
+    pbar = tqdm(loader, desc="Training")
+    for inputs, targets in pbar:
         inputs, targets = inputs.to(device), targets.to(device)
         
         optimizer.zero_grad()
@@ -52,9 +53,16 @@ def train_one_epoch(model, loader, optimizer, criterion, device):
         loss.backward()
         optimizer.step()
         
-        running_loss += loss.item() * inputs.size(0)
+        batch_size = inputs.size(0)
+        running_loss += loss.item() * batch_size
         correct += outputs.argmax(1).eq(targets).sum().item()
-        total += inputs.size(0)
+        total += batch_size
+        
+        # Update progress bar with current metrics
+        pbar.set_postfix({
+            "loss": f"{running_loss / total:.4f}",
+            "acc": f"{100.0 * correct / total:.2f}%"
+        })
         
     return running_loss / total, 100.0 * correct / total
 
