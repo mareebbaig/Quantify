@@ -26,15 +26,18 @@ from brevitas.inject.enum import QuantType
 
 # Robust import for Brevitas activation quant proxy
 try:
-    from brevitas.proxy.activation_quant import ActivationQuantProxyFromInjector
+    from brevitas.proxy.runtime_quant import ActQuantProxyFromInjector as ActivationQuantProxyFromInjector
 except ImportError:
     try:
-        from brevitas.proxy.activation import ActivationQuantProxyFromInjector
+        from brevitas.proxy.activation_quant import ActivationQuantProxyFromInjector
     except ImportError:
-        raise ImportError(
-            "Could not find ActivationQuantProxyFromInjector. "
-            "Please ensure you have a compatible version of Brevitas installed."
-        )
+        try:
+            from brevitas.proxy.activation import ActivationQuantProxyFromInjector
+        except ImportError:
+            raise ImportError(
+                "Could not find ActivationQuantProxyFromInjector. "
+                "Please ensure you have a compatible version of Brevitas installed."
+            )
 
 
 # ------ Rounding helpers ------
