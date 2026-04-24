@@ -23,7 +23,16 @@ import torch.nn as nn
 
 from brevitas.inject import BaseInjector as Injector
 from brevitas.inject.enum import QuantType
-from brevitas.proxy.activation_quant import ActivationQuantProxyFromInjector
+
+# Robust import for Brevitas activation quant proxy
+try:
+    from brevitas.proxy.activation_quant import ActivationQuantProxyFromInjector
+except ImportError:
+    # Fallback for older Brevitas versions where the module might be located elsewhere
+    try:
+        from brevitas.proxy.parameter_quant import ActivationQuantProxyFromInjector
+    except ImportError:
+        from brevitas.proxy.quant_proxy import QuantProxyFromInjector as ActivationQuantProxyFromInjector
 
 
 # ------ Rounding helpers ------
