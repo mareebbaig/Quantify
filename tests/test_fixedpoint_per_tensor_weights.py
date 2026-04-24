@@ -36,10 +36,11 @@ class TestQuantizeFixedPoint:
     def test_unsigned_3bit_lsb_neg1(self):
         """Unsigned, bw=3, lsb=-1  →  grid {0.0, 0.5, 1.0, ..., 3.5}."""
         grid = [k * 0.5 for k in range(8)]  # 0.0 .. 3.5
-        weights = torch.tensor(grid, dtype=torch.float32)
+        grid_floaty = [k * 0.5 + 0.1 for k in range(8)]  # 0.0 .. 3.5
+        weights = torch.tensor(grid_floaty, dtype=torch.float32)
         q = quantize_fixed_point(weights, lsb=-1, bit_width=3, signed=False,
                                  rounding_mode=RoundingMode.ROUND_TO_NEAREST_EVEN)
-        assert torch.allclose(q, weights), f"Expected identity on grid, got {q}"
+        assert torch.allclose(q, grid), f"Expected identity on grid, got {q}"
 
     def test_unsigned_3bit_lsb_neg1_values(self):
         """Verify the exact set of representable unsigned values."""
