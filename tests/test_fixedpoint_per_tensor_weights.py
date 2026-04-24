@@ -5,7 +5,7 @@ Covers:
     - Core quantization math (unsigned / signed / narrow range)
     - Rounding modes (round-to-nearest-even, floor)
     - Automatic signed/unsigned detection
-    - Optimal LSB search (maximise unique values, break ties by MSE)
+    - Optimal LSB search (maximise unique values, break ties by SAD)
     - Brevitas integration via QuantLinear
     - Edge cases (all zeros, single value, already on grid)
 """
@@ -180,8 +180,8 @@ class TestFindOptimalLsb:
                 f"lsb={lsb} gave {n_unique} unique > {best_unique} at best_lsb={best_lsb}"
             )
 
-    def test_tiebreak_by_mse(self):
-        """When two LSBs give the same unique count, pick lower MSE."""
+    def test_tiebreak_by_sad(self):
+        """When two LSBs give the same unique count, pick lower SAD."""
         torch.manual_seed(0)
         weights = torch.randn(512)
         signed = True
@@ -191,16 +191,16 @@ class TestFindOptimalLsb:
         best_lsb = find_optimal_lsb(weights, bw, signed, mode)
         best_q = quantize_fixed_point(weights, best_lsb, bw, signed, mode)
         best_unique = torch.unique(best_q).numel()
-        best_mse = torch.mean((weights - best_q) ** 2).item()
+        best_sad = torch.sum(torch.abs(weights - best_q)).item()
 
         for lsb in range(best_lsb - 3, best_lsb + 4):
             q = quantize_fixed_point(weights, lsb, bw, signed, mode)
             n_unique = torch.unique(q).numel()
-            mse = torch.mean((weights - q) ** 2).item()
+            sad = torch.sum(torch.abs(weights - q)).item()
             if n_unique == best_unique:
-                assert mse >= best_mse - 1e-9, (
+                assert sad >= best_sad - 1e-9, (
                     f"lsb={lsb} tied on unique ({n_unique}) but had lower "
-                    f"MSE {mse:.6f} < {best_mse:.6f}"
+                    f"SAD {sad:.6f} < {best_sad:.6f}"
                 )
 
     def test_all_zeros(self):
@@ -225,11 +225,11 @@ class TestFindOptimalLsb:
         q_signed = quantize_fixed_point(weights, lsb_signed, bw, True,
                                         RoundingMode.ROUND_TO_NEAREST_EVEN)
 
-        mse_u = torch.mean((weights - q_unsigned) ** 2).item()
-        mse_s = torch.mean((weights - q_signed) ** 2).item()
+        sad_u = torch.sum(torch.abs(weights - q_unsigned)).item()
+        sad_s = torch.sum(torch.abs(weights - q_signed)).item()
 
-        assert mse_u <= mse_s, (
-            f"Unsigned MSE {mse_u:.6f} should be <= signed MSE {mse_s:.6f} "
+        assert sad_u <= sad_s, (
+            f"Unsigned SAD {sad_u:.6f} should be <= signed SAD {sad_s:.6f} "
             f"for purely positive weights"
         )
 
@@ -440,3 +440,142 @@ class TestEdgeCases:
         # but clamp does pass gradients within range.  This just checks
         # that backward() doesn't crash.
         assert weights.grad is not None or True  # no crash is the test
+
+
+# =========================================================================
+# 8. Caching & Re-computation
+# =========================================================================
+
+
+class TestCaching:
+    def test_search_runs_once_and_caches(self):
+        quantizer = FixedPointPerTensorWeightQuantizer(bit_width=4)
+        weights = torch.randn(32, 64)
+        
+        # First pass triggers search
+        q1, _, _, _ = quantizer(weights)
+        lsb1 = quantizer.search_result_lsb.item()
+        signed1 = quantizer.search_result_is_signed.item()
+        done1 = quantizer.search_done.item()
+        
+        # Second pass with different scale should NOT re-run search
+        q2, _, _, _ = quantizer(weights * 100.0)
+        
+        self.assertEqual(quantizer.search_result_lsb.item(), lsb1)
+        self.assertEqual(quantizer.search_result_is_signed.item(), signed1)
+        self.assertTrue(quantizer.search_done.item())
+        self.assertTrue(done1)
+
+
+# =========================================================================
+# 9. Device Synchronization
+# =========================================================================
+
+
+class TestDeviceSync:
+    def test_device_sync_preserves_cached_lsb(self):
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA not available")
+            
+        quantizer = FixedPointPerTensorWeightQuantizer(bit_width=4)
+        weights_cpu = torch.randn(32, 64)
+        
+        # Run on CPU
+        q1, _, _, _ = quantizer(weights_cpu)
+        lsb_cpu = quantizer.search_result_lsb.item()
+        
+        # Run on CUDA
+        weights_cuda = weights_cpu.cuda()
+        q2, _, _, _ = quantizer(weights_cuda)
+        
+        # Check that buffers moved to CUDA and lsb is preserved
+        self.assertEqual(quantizer.search_result_lsb.device.type, 'cuda')
+        self.assertEqual(quantizer.search_result_lsb.item(), lsb_cpu)
+
+
+# =========================================================================
+# 10. Negative Halfway Rounding
+# =========================================================================
+
+
+class TestNegativeHalfwayRounding:
+    def test_negative_halfway_rounds_to_even(self):
+        # -0.75 is halfway between -1.0 and -0.5 on lsb=-1 grid
+        # Codes: -1.5 (odd), -1.0 (even), -0.5 (odd), 0.0 (even)
+        # -0.75 / 0.5 = -1.5. Rounds to -2 (even) -> -2 * 0.5 = -1.0
+        weights = torch.tensor([-0.75])
+        q = quantize_fixed_point(weights, lsb=-1, bit_width=3, signed=False,
+                                 rounding_mode=RoundingMode.ROUND_TO_NEAREST_EVEN)
+        self.assertAlmostEqual(q.item(), -1.0)
+
+
+# =========================================================================
+# 11. QuantConv2d Integration
+# =========================================================================
+
+
+class TestQuantConv2dIntegration:
+    def test_quantconv2d_forward(self):
+        from brevitas.nn import QuantConv2d
+        layer = QuantConv2d(3, 16, 3, weight_quant=FixedPointPerTensorWeightQuant)
+        x = torch.randn(1, 3, 32, 32)
+        out = layer(x)
+        self.assertEqual(out.shape, (1, 16, 30, 30))
+        self.assertTrue(torch.isfinite(out).all())
+
+
+# =========================================================================
+# 12. STE Gradient Flow
+# =========================================================================
+
+
+class TestSTEGradientFlow:
+    def test_ste_gradient_flow(self):
+        quantizer = FixedPointPerTensorWeightQuantizer(bit_width=4)
+        weights = torch.randn(32, 64, requires_grad=True)
+        q, _, _, _ = quantizer(weights)
+        loss = q.sum()
+        loss.backward()
+        self.assertIsNotNone(weights.grad)
+        self.assertTrue((weights.grad != 0).any(), "Gradients should flow through clamp")
+
+
+# =========================================================================
+# 13. NaN / Inf Handling
+# =========================================================================
+
+
+class TestNaNInfHandling:
+    def test_nan_propagation(self):
+        weights = torch.tensor([1.0, float('nan'), 3.0])
+        q = quantize_fixed_point(weights, lsb=0, bit_width=4, signed=True,
+                                 rounding_mode=RoundingMode.ROUND_TO_NEAREST_EVEN)
+        self.assertTrue(torch.isnan(q).any(), "NaN should propagate")
+
+    def test_inf_clamping(self):
+        weights = torch.tensor([1.0, float('inf'), -float('inf'), 3.0])
+        q = quantize_fixed_point(weights, lsb=0, bit_width=4, signed=True,
+                                 rounding_mode=RoundingMode.ROUND_TO_NEAREST_EVEN)
+        # Inf should be clamped to max/min representable values
+        self.assertTrue(torch.isfinite(q).all(), "Inf should be clamped to finite values")
+
+
+# =========================================================================
+# 14. Extreme Bit Widths
+# =========================================================================
+
+
+class TestExtremeBitWidths:
+    def test_bit_width_1(self):
+        quantizer = FixedPointPerTensorWeightQuantizer(bit_width=1)
+        weights = torch.randn(64)
+        q, s, zp, bw = quantizer(weights)
+        self.assertTrue(torch.isfinite(q).all())
+        self.assertEqual(bw.item(), 1.0)
+
+    def test_bit_width_32(self):
+        quantizer = FixedPointPerTensorWeightQuantizer(bit_width=32)
+        weights = torch.randn(64)
+        q, s, zp, bw = quantizer(weights)
+        self.assertTrue(torch.isfinite(q).all())
+        self.assertEqual(bw.item(), 32.0)

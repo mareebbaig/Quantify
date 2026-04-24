@@ -125,7 +125,7 @@ def find_optimal_lsb(
 ) -> int:
     """
     Search over LSB positions to find the one that maximises the number of
-    unique quantised values.  Ties are broken by smallest MSE.
+    unique quantised values.  Ties are broken by smallest SAD (Sum of Absolute Differences).
 
     Parameters
     ----------
@@ -182,7 +182,7 @@ def find_optimal_lsb(
         n_unique = int(torch.unique(q).numel())
         sad = float(torch.sum(torch.abs(weights - q)).item())
 
-        if sad < best_sad: # n_unique > best_unique : # n_unique > best_unique: #or (n_unique == best_unique and sad < best_sad)
+        if n_unique > best_unique or (n_unique == best_unique and sad < best_sad):
             best_lsb = lsb
             best_unique = n_unique
             best_sad = sad
