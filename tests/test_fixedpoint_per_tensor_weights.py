@@ -11,6 +11,7 @@ Covers:
 """
 
 import math
+import unittest
 
 import pytest
 import torch
@@ -40,7 +41,7 @@ class TestQuantizeFixedPoint:
         weights = torch.tensor(grid_floaty, dtype=torch.float32)
         q = quantize_fixed_point(weights, lsb=-1, bit_width=3, signed=False,
                                  rounding_mode=RoundingMode.ROUND_TO_NEAREST_EVEN)
-        assert torch.allclose(q, grid), f"Expected identity on grid, got {q}"
+        assert torch.allclose(q, torch.tensor(grid)), f"Expected identity on grid, got {q}"
 
     def test_unsigned_3bit_lsb_neg1_values(self):
         """Verify the exact set of representable unsigned values."""
@@ -447,7 +448,7 @@ class TestEdgeCases:
 # =========================================================================
 
 
-class TestCaching:
+class TestCaching(unittest.TestCase):
     def test_search_runs_once_and_caches(self):
         quantizer = FixedPointPerTensorWeightQuantizer(bit_width=4)
         weights = torch.randn(32, 64)
@@ -472,7 +473,7 @@ class TestCaching:
 # =========================================================================
 
 
-class TestDeviceSync:
+class TestDeviceSync(unittest.TestCase):
     def test_device_sync_preserves_cached_lsb(self):
         if not torch.cuda.is_available():
             self.skipTest("CUDA not available")
@@ -498,7 +499,7 @@ class TestDeviceSync:
 # =========================================================================
 
 
-class TestNegativeHalfwayRounding:
+class TestNegativeHalfwayRounding(unittest.TestCase):
     def test_negative_halfway_rounds_to_even(self):
         # -0.75 is halfway between -1.0 and -0.5 on lsb=-1 grid
         # Codes: -1.5 (odd), -1.0 (even), -0.5 (odd), 0.0 (even)
@@ -514,7 +515,7 @@ class TestNegativeHalfwayRounding:
 # =========================================================================
 
 
-class TestQuantConv2dIntegration:
+class TestQuantConv2dIntegration(unittest.TestCase):
     def test_quantconv2d_forward(self):
         from brevitas.nn import QuantConv2d
         layer = QuantConv2d(3, 16, 3, weight_quant=FixedPointPerTensorWeightQuant)
@@ -529,7 +530,7 @@ class TestQuantConv2dIntegration:
 # =========================================================================
 
 
-class TestSTEGradientFlow:
+class TestSTEGradientFlow(unittest.TestCase):
     def test_ste_gradient_flow(self):
         quantizer = FixedPointPerTensorWeightQuantizer(bit_width=4)
         weights = torch.randn(32, 64, requires_grad=True)
@@ -545,7 +546,7 @@ class TestSTEGradientFlow:
 # =========================================================================
 
 
-class TestNaNInfHandling:
+class TestNaNInfHandling(unittest.TestCase):
     def test_nan_propagation(self):
         weights = torch.tensor([1.0, float('nan'), 3.0])
         q = quantize_fixed_point(weights, lsb=0, bit_width=4, signed=True,
@@ -565,7 +566,7 @@ class TestNaNInfHandling:
 # =========================================================================
 
 
-class TestExtremeBitWidths:
+class TestExtremeBitWidths(unittest.TestCase):
     def test_bit_width_1(self):
         quantizer = FixedPointPerTensorWeightQuantizer(bit_width=1)
         weights = torch.randn(64)
