@@ -202,7 +202,7 @@ class FixedPointQuantFn(Function):
         ).setType(x.type())
         
         # Brevitas expects a 4-tuple output; create bw constant
-        bw = g.op("Constant", value=torch.tensor(float(bit_width)))
+        bw = g.op("Constant", value_t=torch.tensor(float(bit_width)))
         return quantized, scale, zero_point, bw
 
     @staticmethod
