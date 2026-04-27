@@ -202,15 +202,21 @@ class FixedPointQuantFn(Function):
         ).setType(x.type())
         
         # Brevitas expects a 4-tuple output; create bw constant
-        bw = g.op("Constant", value_float=float(bit_width))
+        bw = g.op("Constant", value=torch.tensor(float(bit_width)))
         return quantized, scale, zero_point, bw
 
     @staticmethod
     def forward(ctx, x, scale, zero_point, lsb, bit_width, signed, narrow_range, rounding_mode):
+        ctx.save_for_backward(x)
         # Compute quantization for PyTorch inference/tracing
         quantized = quantize_fixed_point(x, int(lsb), int(bit_width), signed, rounding_mode, narrow_range)
         bw = torch.tensor(float(bit_width), dtype=x.dtype, device=x.device)
         return quantized, scale, zero_point, bw
+
+    @staticmethod
+    def backward(ctx, grad_quantized, grad_scale, grad_zero_point, grad_bw):
+        # Straight-Through Estimator: pass gradient through for the first input (weights)
+        return grad_quantized, None, None, None, None, None, None, None
 
 
 # ---------------------------------------------------------------------------
