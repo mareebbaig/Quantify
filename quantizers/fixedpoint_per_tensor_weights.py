@@ -212,11 +212,6 @@ class FixedPointPerTensorWeightQuantizer(nn.Module):
     """
     A self-contained fixed-point per-tensor weight quantizer.
 
-    Usage::
-
-        quantizer = FixedPointPerTensorWeightQuantizer(bit_width=4)
-        q_weights, scale, zero_point, bw = quantizer(linear.weight)
-
     Parameters
     ----------
     bit_width : int
