@@ -8,9 +8,11 @@ Covers:
     - Optimal LSB search (maximise unique values, break ties by SAD)
     - Brevitas integration via QuantLinear
     - Edge cases (all zeros, single value, already on grid)
+    - ONNX export with custom nodes
 """
 
 import math
+import tempfile
 import unittest
 
 import pytest
@@ -582,3 +584,60 @@ class TestExtremeBitWidths(unittest.TestCase):
         q, s, zp, bw = quantizer(weights)
         self.assertTrue(torch.isfinite(q).all())
         self.assertEqual(bw.item(), 32.0)
+
+
+# =========================================================================
+# 15. ONNX Export Integration
+# =========================================================================
+
+
+class TestONNXExportIntegration(unittest.TestCase):
+    def test_onnx_export_custom_node(self):
+        """Verify that exporting to ONNX emits the custom FixedPointQuant node."""
+        quantizer = FixedPointPerTensorWeightQuantizer(
+            bit_width=8, rounding_mode=RoundingMode.ROUND_TO_NEAREST_EVEN, narrow_range=True
+        )
+        weights = torch.randn(10, 10)
+        # Run forward to populate buffers
+        _ = quantizer(weights)
+        
+        class DummyModel(nn.Module):
+            def __init__(self, quantizer):
+                super().__init__()
+                self.quantizer = quantizer
+            def forward(self, x):
+                q, s, z, b = self.quantizer(x)
+                return q
+
+        model = DummyModel(quantizer)
+        model.eval()
+        
+        with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as f:
+            onnx_path = f.name
+            
+        dummy_input = torch.randn(2, 10)
+        torch.onnx.export(
+            model, 
+            dummy_input, 
+            onnx_path, 
+            opset_version=14, 
+            dynamo=False,
+            input_names=["input"],
+            output_names=["output"]
+        )
+        
+        try:
+            import onnx
+            onnx_model = onnx.load(onnx_path)
+            custom_nodes = [n for n in onnx_model.graph.node if n.op_type == "FixedPointQuant" and n.domain == "mydomain"]
+            self.assertEqual(len(custom_nodes), 1, f"Expected 1 custom node, found {len(custom_nodes)}")
+            
+            node = custom_nodes[0]
+            attrs = {a.name: a for a in node.attribute}
+            self.assertIn("lsb_i", attrs)
+            self.assertIn("bit_width_i", attrs)
+            self.assertIn("signed_i", attrs)
+            self.assertIn("narrow_range_i", attrs)
+            self.assertIn("rounding_mode_s", attrs)
+        except ImportError:
+            self.skipTest("onnx package not installed")
