@@ -636,11 +636,11 @@ class TestONNXExportIntegration(unittest.TestCase):
             # Verify attributes are present
             node = custom_nodes[0]
             attr_names = [a.name for a in node.attribute]
-            self.assertIn("lsb_i", attr_names)
-            self.assertIn("bit_width_i", attr_names)
-            self.assertIn("signed_i", attr_names)
-            self.assertIn("narrow_range_i", attr_names)
-            self.assertIn("rounding_mode_s", attr_names)
+            self.assertIn("lsb", attr_names)
+            self.assertIn("bit_width", attr_names)
+            self.assertIn("signed", attr_names)
+            self.assertIn("narrow_range", attr_names)
+            self.assertIn("rounding_mode", attr_names)
         finally:
             import os
             if os.path.exists(onnx_path):
