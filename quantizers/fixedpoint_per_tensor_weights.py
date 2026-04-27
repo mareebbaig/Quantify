@@ -37,46 +37,6 @@ from brevitas.proxy.parameter_quant import WeightQuantProxyFromInjector
 
 from torch.autograd import Function
 
-class FixedPointQuantFn(Function):
-    """Symbolic shim: emits a single `mydomain::FixedPointQuant` ONNX node."""
-
-    @staticmethod
-    def symbolic(g, x, scale, zero_point,
-                 bit_width, signed, narrow_range, rounding_mode):
-        return g.op(
-            "mydomain::FixedPointQuant",
-            x, scale, zero_point,
-            bit_width_i=int(bit_width),
-            signed_i=int(signed),
-            narrow_range_i=int(narrow_range),
-            rounding_mode_s=str(rounding_mode),
-        ).setType(x.type())
-
-    @staticmethod
-    def forward(ctx, x, scale, zero_point,
-                bit_width, signed, narrow_range, rounding_mode):
-        # Weights are already on the fixed-point grid by the time we export,
-        # so this is effectively a pass-through. PyTorch still needs a valid
-        # tensor of the right shape/dtype for tracing.
-        return x
-
-# ---------------------------------------------------------------------------
-# Rounding helpers
-# ---------------------------------------------------------------------------
-
-class RoundingMode(Enum):
-    ROUND_TO_NEAREST_EVEN = "round_to_nearest_even"
-    FLOOR = "floor"
-
-
-def _round(x: torch.Tensor, mode: RoundingMode) -> torch.Tensor:
-    """Round tensor according to the selected rounding mode."""
-    if mode is RoundingMode.FLOOR:
-        return torch.floor(x)
-    # PyTorch's torch.round uses "round half to even" (banker's rounding)
-    return torch.round(x)
-
-
 # ---------------------------------------------------------------------------
 # Core fixed-point quantization
 # ---------------------------------------------------------------------------
@@ -86,7 +46,7 @@ def quantize_fixed_point(
     lsb: int,
     bit_width: int,
     signed: bool,
-    rounding_mode: RoundingMode,
+    rounding_mode: "RoundingMode",
     narrow_range: bool = True,
 ) -> torch.Tensor:
     """
@@ -144,7 +104,7 @@ def find_optimal_lsb(
     weights: torch.Tensor,
     bit_width: int,
     signed: bool,
-    rounding_mode: RoundingMode,
+    rounding_mode: "RoundingMode",
     narrow_range: bool = True,
 ) -> Tuple[int, int]:
     """
@@ -202,6 +162,55 @@ def find_optimal_lsb(
             best_sad = sad
 
     return best_lsb, best_unique
+
+
+# ---------------------------------------------------------------------------
+# Rounding helpers
+# ---------------------------------------------------------------------------
+
+class RoundingMode(Enum):
+    ROUND_TO_NEAREST_EVEN = "round_to_nearest_even"
+    FLOOR = "floor"
+
+
+def _round(x: torch.Tensor, mode: RoundingMode) -> torch.Tensor:
+    """Round tensor according to the selected rounding mode."""
+    if mode is RoundingMode.FLOOR:
+        return torch.floor(x)
+    # PyTorch's torch.round uses "round half to even" (banker's rounding)
+    return torch.round(x)
+
+
+# ---------------------------------------------------------------------------
+# ONNX Custom Node Shim
+# ---------------------------------------------------------------------------
+
+class FixedPointQuantFn(Function):
+    """Symbolic shim: emits a single `mydomain::FixedPointQuant` ONNX node."""
+
+    @staticmethod
+    def symbolic(g, x, scale, zero_point, lsb, bit_width, signed, narrow_range, rounding_mode):
+        # Emit custom ONNX node with all quantization parameters
+        quantized = g.op(
+            "mydomain::FixedPointQuant",
+            x, scale, zero_point,
+            lsb_i=int(lsb),
+            bit_width_i=int(bit_width),
+            signed_i=int(signed),
+            narrow_range_i=int(narrow_range),
+            rounding_mode_s=str(rounding_mode.value),
+        ).setType(x.type())
+        
+        # Brevitas expects a 4-tuple output; create bw constant
+        bw = g.op("Constant", value_float=float(bit_width))
+        return quantized, scale, zero_point, bw
+
+    @staticmethod
+    def forward(ctx, x, scale, zero_point, lsb, bit_width, signed, narrow_range, rounding_mode):
+        # Compute quantization for PyTorch inference/tracing
+        quantized = quantize_fixed_point(x, int(lsb), int(bit_width), signed, rounding_mode, narrow_range)
+        bw = torch.tensor(float(bit_width), dtype=x.dtype, device=x.device)
+        return quantized, scale, zero_point, bw
 
 
 # ---------------------------------------------------------------------------
@@ -263,10 +272,11 @@ class FixedPointPerTensorWeightQuantizer(nn.Module):
         bit_width : torch.Tensor
             The bit-width as a float tensor.
         """
-
-        if not self.search_done.item():
+        # Avoid tracing/export issues with control flow and .item() calls
+        is_exporting = torch.onnx.is_in_onnx_export()
+        
+        if not is_exporting and not self.search_done.item():
             signed = self.detect_signed(weights)
-
             lsb, num_unique = find_optimal_lsb(
                 weights,
                 self.bit_width,
@@ -284,16 +294,21 @@ class FixedPointPerTensorWeightQuantizer(nn.Module):
             signed = self.search_result_is_signed.item()
             lsb = self.search_result_lsb.item()
 
+        # Quantize
         quantized = quantize_fixed_point(
             weights, lsb, self.bit_width, signed, self.rounding_mode, self.narrow_range
         )
 
+        # Brevitas compatibility tensors
         step = 2.0 ** lsb
         scale = torch.tensor(step, dtype=weights.dtype, device=weights.device)
         zero_point = torch.tensor(0.0, dtype=weights.dtype, device=weights.device)
         bw = torch.tensor(float(self.bit_width), device=weights.device)
 
-        return quantized, scale, zero_point, bw
+        # Route through custom autograd.Function to trigger ONNX symbolic export
+        return FixedPointQuantFn.apply(
+            weights, scale, zero_point, lsb, self.bit_width, signed, self.narrow_range, self.rounding_mode
+        )
 
 
 # ---------------------------------------------------------------------------
