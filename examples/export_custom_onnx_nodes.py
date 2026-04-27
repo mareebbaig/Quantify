@@ -34,7 +34,7 @@ class CustomQuantConvFn(torch.autograd.Function):
             padding_i=int(padding),
             bit_width_i=int(bit_width),
             rounding_mode_s=str(rounding_mode),
-            is_signed_b=bool(is_signed),
+            is_signed_i=int(is_signed),
             dummy_tensor_t=torch.tensor([1.0, 2.0, 3.0]),
         )
 
@@ -58,7 +58,7 @@ class CustomQuantLinearFn(torch.autograd.Function):
             x, weight, bias,
             bit_width_i=int(bit_width),
             rounding_mode_s=str(rounding_mode),
-            is_signed_b=bool(is_signed),
+            is_signed_i=int(is_signed),
             dummy_tensor_t=torch.tensor([4.0, 5.0]),
         )
 
