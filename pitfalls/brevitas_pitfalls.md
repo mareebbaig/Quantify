@@ -22,8 +22,30 @@
 - Always explicitly pass `dynamo=False` to `torch.onnx.export()`.
 - Pin your PyTorch version if needed (PyTorch 2.9+ deprecates the legacy exporter). If you must use `dynamo=True`, migrate to `torch.export`-compatible custom ops or pre-quantize weights before export.
 
-## 💡 Quick Checklist Before Export
-- [ ] All pooling/normalization layers use standard `nn.*` wrappers.
-- [ ] `nn.Flatten()` or `.view()` precedes every `QuantLinear`.
-- [ ] `torch.onnx.export(..., dynamo=False)` is explicitly set.
-- [ ] Dummy forward pass succeeds in `eval()` mode before export.
+## 4. Bias Quantization Requires Input Quantization
+**When this happens:** You enable `bias_quant=Int8Bias` (or similar) on a `QuantConv2d`/`QuantLinear` without enabling `input_quant`.
+**The Problem:** `Int8Bias` assumes bias scale = `input_scale * weight_scale`. Without a quantized input, the layer cannot compute this scale, raising `RuntimeError: QuantLayer is not correctly configured` or `RuntimeError: Input scale required`.
+**How to Prevent It:**
+- Enable `input_quant` (e.g., `Int8ActPerTensorFloat`) when using `Int8Bias`.
+- Alternatively, use bias quantizers with internal scaling like `Int8BiasPerTensorFloatInternalScaling` if you don't want to quantize inputs.
+
+## 5. `load_state_dict` Missing Keys in Quantized Models
+**When this happens:** You load a pretrained floating-point `state_dict` into a quantized model using `model.load_state_dict(fp_state_dict)`.
+**The Problem:** Quantized layers introduce learned parameters for scales, zero-points, and bit-widths that don't exist in the FP model. PyTorch raises `RuntimeError: Missing key(s) in state_dict`.
+**How to Prevent It:**
+- Set `config.IGNORE_MISSING_KEYS = True` before loading, or use `strict=False`.
+- Brevitas automatically re-initializes scale parameters based on the loaded weights after import.
+
+## 6. `QuantTensor` Validity & Scale Mismatch in Training vs Eval
+**When this happens:** You perform element-wise operations (add, cat) on `QuantTensor`s during training and get validity errors or unexpected bit-width expansion.
+**The Problem:** During training, activation scales are collected per-batch and differ between tensors. Brevitas allows adding them but marks the result `is_valid=False` and averages scales. In `eval()` mode, scales are fixed (EMA), and mismatched scales will cause errors.
+**How to Prevent It:**
+- Use `QuantIdentity` to align scales before operations if needed.
+- Ensure `model.eval()` before export or inference to stabilize scales.
+- Be aware that accumulator bit-widths grow during training (e.g., 8b + 8b → 17b). Output quantization (`output_quant`) is often needed to clamp bit-widths.
+
+## 7. `return_quant_tensor=True` Overhead & Necessity
+**When this happens:** You set `return_quant_tensor=True` on every layer unnecessarily.
+**The Problem:** It forces Brevitas to maintain and propagate `QuantTensor` metadata through the entire graph, increasing memory and compute overhead. It's only required when downstream layers need quantization metadata (e.g., bias quantization, custom ONNX export, or explicit quantization math).
+**How to Prevent It:**
+- Keep `return_quant_tensor=False` (default) unless specifically required by the architecture or export target.
