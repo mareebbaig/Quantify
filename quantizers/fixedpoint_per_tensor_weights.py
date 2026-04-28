@@ -187,10 +187,15 @@ class FixedPointQuantFn(Function):
 
     @staticmethod
     def symbolic(g, x, scale, zero_point, lsb, bit_width, signed, narrow_range, rounding_mode):
-        # Emit custom ONNX node with all quantization parameters
+        # Extract scale and zero_point values to embed as attributes instead of separate constant nodes
+        scale_val = scale.item()
+        zero_point_val = zero_point.item()
+        
         quantized = g.op(
             "mydomain::FixedPointQuant",
-            x, scale, zero_point,
+            x,
+            scale_f=scale_val,
+            zero_point_f=zero_point_val,
             lsb_i=int(lsb),
             bit_width_i=int(bit_width),
             signed_i=int(signed),
