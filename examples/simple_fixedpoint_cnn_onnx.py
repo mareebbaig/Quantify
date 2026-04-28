@@ -6,11 +6,16 @@ This script demonstrates how to:
 2. Run a dummy inference pass.
 3. Export the model to ONNX using the legacy exporter (dynamo=False), which is required
    for custom torch.autograd.Function symbolic methods.
+4. Load the exported ONNX model and verify that the custom quantizer node is present.
+5. Inspect the quantizer attributes embedded in the ONNX graph.
 """
 
 import torch
 import torch.nn as nn
 import brevitas.nn as qnn
+import onnx
+import onnxruntime as ort
+import numpy as np
 from quantizers.fixedpoint_per_tensor_weights import FixedPointPerTensorWeightQuant
 
 
@@ -38,6 +43,47 @@ class SimpleFixedPointCNN(nn.Module):
         x = self.features(x)
         x = self.classifier(x)
         return x
+
+
+def verify_onnx_model(onnx_path: str) -> bool:
+    """Load ONNX model and check for the custom quantizer node."""
+    model = onnx.load(onnx_path)
+    onnx.checker.check_model(model)
+    
+    custom_node_found = False
+    for node in model.graph.node:
+        if node.op_type == "FixedPointQuant" and node.domain == "mydomain":
+            custom_node_found = True
+            print(f"  Found custom node: {node.op_type} (domain: {node.domain})")
+            print(f"    Attributes: {[(a.name, a.i if a.i else a.f if a.f else a.s) for a in node.attribute]}")
+            break
+            
+    if not custom_node_found:
+        print("  WARNING: Custom 'mydomain::FixedPointQuant' node not found in ONNX graph!")
+        return False
+    return True
+
+
+def compare_outputs(pytorch_model, onnx_path, dummy_input, atol=1e-4):
+    """Run inference on PyTorch and ONNX Runtime, then compare outputs."""
+    try:
+        pytorch_model.eval()
+        with torch.no_grad():
+            pt_output = pytorch_model(dummy_input).numpy()
+            
+        sess = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
+        ort_inputs = {sess.get_inputs()[0].name: dummy_input.numpy()}
+        ort_output = sess.run(None, ort_inputs)[0]
+        
+        if np.allclose(pt_output, ort_output, atol=atol):
+            print(f"  Outputs match! Max diff: {np.max(np.abs(pt_output - ort_output)):.2e}")
+            return True
+        else:
+            print(f"  Outputs mismatch! Max diff: {np.max(np.abs(pt_output - ort_output)):.2e}")
+            return False
+    except Exception as e:
+        print(f"  ONNX Runtime inference skipped or failed (custom op may not be registered): {e}")
+        return None
 
 
 def main():
@@ -71,6 +117,18 @@ def main():
         dynamic_axes={"input": {0: "batch_size"}, "output": {0: "batch_size"}}
     )
     print(f"Successfully exported model to {onnx_path}")
+
+    # 3. Verify ONNX Model
+    print("\nVerifying ONNX model...")
+    if verify_onnx_model(onnx_path):
+        print("  ONNX model structure verified successfully.")
+    else:
+        print("  ONNX model verification failed.")
+        return
+
+    # 4. Compare Outputs (Optional, requires onnxruntime)
+    print("\nComparing PyTorch and ONNX Runtime outputs...")
+    compare_outputs(model, onnx_path, dummy_input)
 
 
 if __name__ == "__main__":

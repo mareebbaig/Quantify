@@ -1,0 +1,125 @@
+import os
+import tempfile
+import torch
+import torch.nn as nn
+import brevitas.nn as qnn
+import onnx
+import numpy as np
+import pytest
+
+from quantizers.fixedpoint_per_tensor_weights import FixedPointPerTensorWeightQuant
+
+
+class SimpleFixedPointCNN(nn.Module):
+    """A minimal CNN for CIFAR-10 using fixed-point weight quantization."""
+
+    def __init__(self, num_classes: int = 10):
+        super().__init__()
+        self.features = nn.Sequential(
+            qnn.QuantConv2d(3, 16, kernel_size=3, padding=1, weight_quant=FixedPointPerTensorWeightQuant),
+            qnn.QuantReLU(),
+            nn.MaxPool2d(2),
+            qnn.QuantConv2d(16, 32, kernel_size=3, padding=1, weight_quant=FixedPointPerTensorWeightQuant),
+            qnn.QuantReLU(),
+            nn.MaxPool2d(2),
+        )
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            qnn.QuantLinear(32 * 8 * 8, 64, weight_quant=FixedPointPerTensorWeightQuant),
+            qnn.QuantReLU(),
+            qnn.QuantLinear(64, num_classes, weight_quant=FixedPointPerTensorWeightQuant),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.features(x)
+        x = self.classifier(x)
+        return x
+
+
+def get_onnx_model(onnx_path: str):
+    return onnx.load(onnx_path)
+
+
+def count_custom_nodes(onnx_model):
+    return sum(1 for node in onnx_model.graph.node if node.op_type == "FixedPointQuant" and node.domain == "mydomain")
+
+
+def get_custom_node_attributes(onnx_model):
+    attrs = []
+    for node in onnx_model.graph.node:
+        if node.op_type == "FixedPointQuant" and node.domain == "mydomain":
+            attrs.append({a.name: (a.i if a.i else a.f if a.f else a.s) for a in node.attribute})
+    return attrs
+
+
+class TestFixedPointOnnxExport:
+    @pytest.fixture
+    def model(self):
+        return SimpleFixedPointCNN(num_classes=10).eval()
+
+    @pytest.fixture
+    def dummy_input(self):
+        return torch.randn(1, 3, 32, 32)
+
+    def test_export_creates_onnx_file(self, model, dummy_input, tmp_path):
+        onnx_path = tmp_path / "test_model.onnx"
+        torch.onnx.export(
+            model, dummy_input, str(onnx_path),
+            dynamo=False, opset_version=13,
+            input_names=["input"], output_names=["output"]
+        )
+        assert onnx_path.exists()
+
+    def test_export_contains_custom_quantizer_nodes(self, model, dummy_input, tmp_path):
+        onnx_path = tmp_path / "test_model.onnx"
+        torch.onnx.export(
+            model, dummy_input, str(onnx_path),
+            dynamo=False, opset_version=13,
+            input_names=["input"], output_names=["output"]
+        )
+        onnx_model = get_onnx_model(str(onnx_path))
+        assert count_custom_nodes(onnx_model) > 0, "Expected at least one custom FixedPointQuant node"
+
+    def test_custom_node_attributes_are_correct(self, model, dummy_input, tmp_path):
+        onnx_path = tmp_path / "test_model.onnx"
+        torch.onnx.export(
+            model, dummy_input, str(onnx_path),
+            dynamo=False, opset_version=13,
+            input_names=["input"], output_names=["output"]
+        )
+        onnx_model = get_onnx_model(str(onnx_path))
+        attrs_list = get_custom_node_attributes(onnx_model)
+        
+        assert len(attrs_list) > 0
+        for attrs in attrs_list:
+            assert "lsb_i" in attrs
+            assert "bit_width_i" in attrs
+            assert "signed_i" in attrs
+            assert "narrow_range_i" in attrs
+            assert "rounding_mode_s" in attrs
+            assert "scale_f" in attrs
+            assert "zero_point_f" in attrs
+
+    def test_onnx_model_validates(self, model, dummy_input, tmp_path):
+        onnx_path = tmp_path / "test_model.onnx"
+        torch.onnx.export(
+            model, dummy_input, str(onnx_path),
+            dynamo=False, opset_version=13,
+            input_names=["input"], output_names=["output"]
+        )
+        onnx_model = get_onnx_model(str(onnx_path))
+        onnx.checker.check_model(onnx_model)  # Should not raise
+
+    def test_onnx_loads_and_parses_correctly(self, model, dummy_input, tmp_path):
+        """Ensure the ONNX file can be loaded and parsed without errors."""
+        onnx_path = tmp_path / "test_model.onnx"
+        torch.onnx.export(
+            model, dummy_input, str(onnx_path),
+            dynamo=False, opset_version=13,
+            input_names=["input"], output_names=["output"]
+        )
+        # Load and verify structure
+        onnx_model = get_onnx_model(str(onnx_path))
+        assert onnx_model.graph.input[0].name == "input"
+        assert onnx_model.graph.output[0].name == "output"
+        assert len(onnx_model.graph.node) > 0
