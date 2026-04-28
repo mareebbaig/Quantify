@@ -158,7 +158,7 @@ class CustomYOLOv8nTrainer(DetectionTrainer):
                 print(f"   Sample unique values: {unique_vals[:10]}")
             else:
                 print("⚠️  No quantized layer found to verify weight quantization.")
-                
+
             self.validator(model=model)
 
 
