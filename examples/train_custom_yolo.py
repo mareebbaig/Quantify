@@ -132,7 +132,10 @@ class CustomYOLOv8nTrainer(DetectionTrainer):
         return True
 
     def final_eval(self):
-        pass
+        best_path = self.save_dir / "weights" / "best.pt"
+        if best_path.exists():
+            model = self.load_model(best_path)
+            self.validator(model=model)
 
 
     def get_model(self, cfg=None, weights=None, verbose=True):
