@@ -36,7 +36,7 @@ from brevitas.inject.enum import QuantType
 from brevitas.proxy.parameter_quant import WeightQuantProxyFromInjector
 
 from torch.autograd import Function
-from torch.onnx.utils import _get_tensor_value
+from torch.onnx import symbolic_helper
 
 # ---------------------------------------------------------------------------
 # Core fixed-point quantization
@@ -190,8 +190,8 @@ class FixedPointQuantFn(Function):
     def symbolic(g, x, scale, zero_point, lsb, bit_width, signed, narrow_range, rounding_mode):
         # Extract scale and zero_point values to embed as attributes instead of separate constant nodes
         # During ONNX export, scale and zero_point are torch._C.Value objects, not tensors.
-        scale_val = _get_tensor_value(scale).item()
-        zero_point_val = _get_tensor_value(zero_point).item()
+        scale_val = symbolic_helper._maybe_get_const(scale, "t")
+        zero_point_val = symbolic_helper._maybe_get_const(zero_point, "t")
         
         quantized = g.op(
             "mydomain::FixedPointQuant",
