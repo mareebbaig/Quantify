@@ -188,8 +188,9 @@ class FixedPointQuantFn(Function):
     @staticmethod
     def symbolic(g, x, scale, zero_point, lsb, bit_width, signed, narrow_range, rounding_mode):
         # Extract scale and zero_point values to embed as attributes instead of separate constant nodes
-        scale_val = scale.item()
-        zero_point_val = zero_point.item()
+        # During ONNX export, scale and zero_point are torch._C.Value objects, not tensors.
+        scale_val = g._get_tensor_value(scale).item()
+        zero_point_val = g._get_tensor_value(zero_point).item()
         
         quantized = g.op(
             "mydomain::FixedPointQuant",
