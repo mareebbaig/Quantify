@@ -297,16 +297,10 @@ class FixedPointPerTensorWeightQuantizer(nn.Module):
             signed = self.search_result_is_signed.item()
             lsb = self.search_result_lsb.item()
 
-        # Quantize
-        quantized = quantize_fixed_point(
-            weights, lsb, self.bit_width, signed, self.rounding_mode, self.narrow_range
-        )
-
         # Brevitas compatibility tensors
         step = 2.0 ** lsb
         scale = torch.tensor(step, dtype=weights.dtype, device=weights.device)
         zero_point = torch.tensor(0.0, dtype=weights.dtype, device=weights.device)
-        bw = torch.tensor(float(self.bit_width), device=weights.device)
 
         # Route through custom autograd.Function to trigger ONNX symbolic export
         return FixedPointQuantFn.apply(
