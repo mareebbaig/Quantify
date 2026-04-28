@@ -29,7 +29,9 @@ class SmallFixedPointCNN(nn.Module):
             weight_quant=FixedPointPerTensorWeightQuant,
         )
         self.relu = qnn.QuantReLU()
-        self.pool = qnn.QuantGlobalAvgPool2d()
+        # Brevitas does not provide a QuantGlobalAvgPool2d wrapper.
+        # Use standard PyTorch adaptive average pooling instead.
+        self.pool = nn.AdaptiveAvgPool2d(1)
         self.fc = qnn.QuantLinear(
             in_features=16,
             out_features=num_classes,
