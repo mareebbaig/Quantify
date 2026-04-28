@@ -84,9 +84,6 @@ def quantize_fixed_point(
         code_min = 0
         code_max = 2 ** bit_width - 1
 
-    val_min = code_min * step
-    val_max = code_max * step
-
     # Quantize: map to integer codes, round, clamp, scale back
     codes = weights / step
     codes = _round(codes, rounding_mode)

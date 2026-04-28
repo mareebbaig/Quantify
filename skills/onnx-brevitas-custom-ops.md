@@ -31,11 +31,14 @@ The pattern wraps a layer's forward pass in a `torch.autograd.Function` to inter
 - **Attribute Type Suffixes**: ONNX attributes must be suffixed with a type character (`_i` for int, `_s` for string, `_t` for tensor, `_b` for bool). Using unsuffixed names or incorrect suffixes raises a `ValueError` during export.
 - **Signature Divergence**: `symbolic` and `forward` have different first arguments. `symbolic` receives the graph builder `g`, while `forward` receives the context `ctx`. Do not confuse them.
 - **Quantization Math is Not Handled**: The reference example uses standard `F.conv2d`/`F.linear` in `forward`. It does not demonstrate embedding quantization math, handling Brevitas `QuantTensor` metadata, or managing scale/zero-point. If you need quantization, you must implement it yourself in `forward` and pass relevant parameters to `symbolic`.
+- **Export-Time Calibration Breaks Tracing**: If your quantizer runs search/calibration logic in `forward()`, it will fail during ONNX export. Wrap non-export logic with `if not torch.onnx.is_in_onnx_export():` and register search results as `nn.Module` buffers so they persist through export and `state_dict`.
+- **ONNX Runtime Compatibility**: `mydomain::CustomOp` exports fine, but ORT will fall back to standard ops or warn if no custom kernel is registered. Clarify that custom nodes are for export/graph inspection, not necessarily for ORT inference.
 
 ## 4. Verification
 - **Pre-export Inference**: Run a dummy forward pass before exporting to ensure `forward` executes without errors and produces the expected output shape.
 - **Graph Inspection**: Open the exported `.onnx` file in Netron. Verify that custom nodes (e.g., `mydomain::CustomQuantConv`) appear in the graph and that attributes are correctly typed and populated.
 - **Round-trip Testing**: The reference example does not demonstrate loading the ONNX model back into PyTorch or comparing outputs against the reference implementation. This step is recommended but not covered by the pattern.
+- **Dynamic Axes & Dummy Inputs**: Pass `dynamic_axes` to `torch.onnx.export()` if batch/height/width vary at runtime. Ensure dummy inputs match expected runtime dimensions and data types.
 
 ## 5. Reference
 - **Example File**: `examples/export_custom_onnx_nodes.py`

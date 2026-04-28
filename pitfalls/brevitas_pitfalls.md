@@ -23,6 +23,7 @@
 **How to Prevent It:**
 - Always explicitly pass `dynamo=False` to `torch.onnx.export()`.
 - Pin your PyTorch version if needed (PyTorch 2.9+ deprecates the legacy exporter). If you must use `dynamo=True`, migrate to `torch.export`-compatible custom ops or pre-quantize weights before export.
+- **Future-Proofing Note:** The legacy exporter is deprecated. For long-term compatibility, consider migrating to `torch.export`-compatible custom ops or exporting pre-quantized weights as standard ONNX ops.
 
 ## 4. Bias Quantization Requires Input Quantization
 **When this happens:** You enable `bias_quant=Int8Bias` (or similar) on a `QuantConv2d`/`QuantLinear` without enabling `input_quant`.
@@ -51,3 +52,8 @@
 **The Problem:** It forces Brevitas to maintain and propagate `QuantTensor` metadata through the entire graph, increasing memory and compute overhead. It's only required when downstream layers need quantization metadata (e.g., bias quantization, custom ONNX export, or explicit quantization math).
 **How to Prevent It:**
 - Keep `return_quant_tensor=False` (default) unless specifically required by the architecture or export target.
+
+## 8. Custom ONNX Nodes Don't Run in ORT
+**When this happens:** You export a model with `mydomain::CustomOp` and expect ONNX Runtime to execute it natively.
+**The Problem:** ORT only executes standard ONNX ops or registered custom kernels. Unregistered `mydomain::` nodes will cause fallback warnings or runtime errors.
+**How to Prevent It:** Use custom nodes for graph inspection/export compatibility only. For ORT deployment, convert to QCDQ (`export_onnx_qcdq`) or implement a custom ORT kernel.

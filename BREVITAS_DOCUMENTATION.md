@@ -10,6 +10,7 @@
 - **`QuantReLU`**: Applies ReLU then quantizes. Default: `Uint8ActPerTensorFloat` (unsigned).
 - **`QuantIdentity`**: Wraps activations for quantization. Default: `Int8ActPerTensorFloat`.
 - **Keyword Arguments**: Override quantizer attributes via layer kwargs (e.g., `weight_bit_width=4`, `weight_scaling_per_output_channel=True`). Prefixes: `weight_`, `input_`, `output_`, `bias_`.
+- **Activation Quantization Pairing**: To fully quantize a layer, pair `weight_quant` with `input_quant` and/or `output_quant`. Example: `qnn.QuantConv2d(..., input_quant=Int8ActPerTensorFloat, output_quant=Int8ActPerTensorFloat)`. Ensure `return_quant_tensor=True` if downstream layers require `QuantTensor` metadata.
 
 ## 3. Custom Quantizer Development
 - **ExtendedInjector**: Brevitas uses auto-wiring dependency injection to assemble quantizers from `brevitas.core` modules.
@@ -27,6 +28,7 @@
   ```
 - **Dynamic Attributes**: Use `@value` decorator to compute attributes at DI time (e.g., `scaling_init` based on `module.weight.abs().max()`).
 - **Sharing**: Share quantizer instances across layers by passing `weight_quant=layer1.weight_quant`. Re-initializes automatically when shared.
+- **Injector Wiring Clarification**: When using a custom quantizer (e.g., `weight_quant=FixedPointPerTensorWeightQuant`), ensure `proxy_class` and `tensor_quant` align correctly. Class-level attributes like `signed` and `bit_width` act as defaults for the DI system but can be overridden per-layer via kwargs. The `proxy_class` dictates how the quantizer is instantiated and wired into the layer's forward pass.
 
 ## 4. Training & Calibration
 - **QAT**: Standard PyTorch training loop. Quantization is active by default.

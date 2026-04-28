@@ -82,13 +82,12 @@ class Conv(nn.Module):
     """Standard Conv + BN + SiLU. Supports Brevitas quantization."""
 
     def __init__(self, in_ch: int, out_ch: int, k: int = 1, s: int = 1, p: int = None,
-                 weight_quant=None, act_quant=None, weight_bit_width: int = 8, act_bit_width: int = 8):
+                 weight_quant=None, act_quant=None):
         super().__init__()
         if p is None:
             p = k // 2  # 'same' padding for odd kernels
-        self.conv = qnn.QuantConv2d(in_ch, out_ch, k, s, p, bias=False,
-                                    weight_quant=weight_quant, act_quant=act_quant,
-                                    weight_bit_width=weight_bit_width, act_bit_width=act_bit_width)
+        self.conv = qnn.QuantConv2d(in_ch, out_ch, k, s, p, bias=False) #, weight_quant=weight_quant , output_quant=act_quant
+        # self.conv = nn.Conv2d(in_ch, out_ch, k, s, p, bias=False) # The unquantized version
         self.bn   = nn.BatchNorm2d(out_ch, eps=1e-3, momentum=0.03)
         self.act  = nn.SiLU(inplace=True)
         # TODO: Add SiLU quantizer later
@@ -108,11 +107,11 @@ class Bottleneck(nn.Module):
     """
 
     def __init__(self, in_ch: int, out_ch: int, shortcut: bool = True, e: float = 0.5,
-                 weight_quant=None, act_quant=None, weight_bit_width: int = 8, act_bit_width: int = 8):
+                 weight_quant=None, act_quant=None):
         super().__init__()
         hidden = int(out_ch * e)
-        self.cv1 = Conv(in_ch,  hidden, k=3, s=1, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width)
-        self.cv2 = Conv(hidden, out_ch, k=3, s=1, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width)
+        self.cv1 = Conv(in_ch,  hidden, k=3, s=1, weight_quant=weight_quant, act_quant=act_quant)
+        self.cv2 = Conv(hidden, out_ch, k=3, s=1, weight_quant=weight_quant, act_quant=act_quant)
         self.add = shortcut and in_ch == out_ch
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -126,14 +125,14 @@ class C2f(nn.Module):
     """
 
     def __init__(self, in_ch: int, out_ch: int, n: int = 1, shortcut: bool = False, e: float = 0.5,
-                 weight_quant=None, act_quant=None, weight_bit_width: int = 8, act_bit_width: int = 8):
+                 weight_quant=None, act_quant=None):
         super().__init__()
         self.hidden = int(out_ch * e)  # hidden channels per branch
-        self.cv1 = Conv(in_ch, 2 * self.hidden, k=1, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width)
-        self.cv2 = Conv((2 + n) * self.hidden, out_ch, k=1, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width)
+        self.cv1 = Conv(in_ch, 2 * self.hidden, k=1, weight_quant=weight_quant, act_quant=act_quant)
+        self.cv2 = Conv((2 + n) * self.hidden, out_ch, k=1, weight_quant=weight_quant, act_quant=act_quant)
         # Named 'm' to match official Ultralytics C2f checkpoint keys exactly
         self.m = nn.ModuleList(
-            Bottleneck(self.hidden, self.hidden, shortcut=shortcut, e=1.0, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width)
+            Bottleneck(self.hidden, self.hidden, shortcut=shortcut, e=1.0, weight_quant=weight_quant, act_quant=act_quant)
             for _ in range(n)
         )
 
@@ -152,12 +151,11 @@ class SPPF(nn.Module):
     Equivalent to SPP(k=(5,9,13)) but uses sequential 5x5 max-pools.
     """
 
-    def __init__(self, in_ch: int, out_ch: int, k: int = 5,
-                 weight_quant=None, act_quant=None, weight_bit_width: int = 8, act_bit_width: int = 8):
+    def __init__(self, in_ch: int, out_ch: int, k: int = 5, weight_quant=None, act_quant=None):
         super().__init__()
         hidden = in_ch // 2
-        self.cv1  = Conv(in_ch,  hidden, k=1, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width)
-        self.cv2  = Conv(hidden * 4, out_ch, k=1, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width)
+        self.cv1  = Conv(in_ch,  hidden, k=1, weight_quant=weight_quant, act_quant=act_quant)
+        self.cv2  = Conv(hidden * 4, out_ch, k=1, weight_quant=weight_quant, act_quant=act_quant)
         self.pool = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -207,7 +205,7 @@ class DetectHead(nn.Module):
     reg_max = 16  # DFL bins — must match official checkpoint
 
     def __init__(self, nc: int = 80, ch: tuple = (64, 128, 256), stride: torch.Tensor = None,
-                 weight_quant=None, act_quant=None, weight_bit_width: int = 8, act_bit_width: int = 8):
+                 weight_quant=None, act_quant=None):
         super().__init__()
         self.nc = nc
         self.nl = len(ch)      # number of detection layers
@@ -231,16 +229,16 @@ class DetectHead(nn.Module):
 
         self.cv2 = nn.ModuleList(
             nn.Sequential(
-                Conv(c, c2_hidden, k=3, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width),
-                Conv(c2_hidden, c2_hidden, k=3, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width),
+                Conv(c, c2_hidden, k=3, weight_quant=weight_quant, act_quant=act_quant),
+                Conv(c2_hidden, c2_hidden, k=3, weight_quant=weight_quant, act_quant=act_quant),
                 nn.Conv2d(c2_hidden, 4 * self.reg_max, 1)
             )
             for c in ch
         )
         self.cv3 = nn.ModuleList(
             nn.Sequential(
-                Conv(c, c3_hidden, k=3, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width),
-                Conv(c3_hidden, c3_hidden, k=3, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width),
+                Conv(c, c3_hidden, k=3, weight_quant=weight_quant, act_quant=act_quant),
+                Conv(c3_hidden, c3_hidden, k=3, weight_quant=weight_quant, act_quant=act_quant),
                 nn.Conv2d(c3_hidden, nc, 1)
             )
             for c in ch
@@ -316,38 +314,38 @@ class YOLOv8n(nn.Module):
         C1, C2, C3, C4, C5 = 16, 32, 64, 128, 256
 
         # ---- Backbone ----
-        self.b0  = Conv(3,  C1, k=3, s=2, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width)                         # 0  P1/2
-        self.b1  = Conv(C1, C2, k=3, s=2, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width)                         # 1  P2/4
-        self.b2  = C2f(C2, C2, n=scale_depth(3), shortcut=True, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width)   # 2
-        self.b3  = Conv(C2, C3, k=3, s=2, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width)                         # 3  P3/8
-        self.b4  = C2f(C3, C3, n=scale_depth(6), shortcut=True, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width)   # 4
-        self.b5  = Conv(C3, C4, k=3, s=2, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width)                         # 5  P4/16
-        self.b6  = C2f(C4, C4, n=scale_depth(6), shortcut=True, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width)   # 6
-        self.b7  = Conv(C4, C5, k=3, s=2, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width)                         # 7  P5/32
-        self.b8  = C2f(C5, C5, n=scale_depth(3), shortcut=True, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width)   # 8
-        self.b9  = SPPF(C5, C5, k=5, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width)                              # 9
+        self.b0  = Conv(3,  C1, k=3, s=2, weight_quant=weight_quant, act_quant=act_quant)                         # 0  P1/2
+        self.b1  = Conv(C1, C2, k=3, s=2, weight_quant=weight_quant, act_quant=act_quant)                         # 1  P2/4
+        self.b2  = C2f(C2, C2, n=scale_depth(3), shortcut=True, weight_quant=weight_quant, act_quant=act_quant)   # 2
+        self.b3  = Conv(C2, C3, k=3, s=2, weight_quant=weight_quant, act_quant=act_quant)                         # 3  P3/8
+        self.b4  = C2f(C3, C3, n=scale_depth(6), shortcut=True, weight_quant=weight_quant, act_quant=act_quant)   # 4
+        self.b5  = Conv(C3, C4, k=3, s=2, weight_quant=weight_quant, act_quant=act_quant)                         # 5  P4/16
+        self.b6  = C2f(C4, C4, n=scale_depth(6), shortcut=True, weight_quant=weight_quant, act_quant=act_quant)   # 6
+        self.b7  = Conv(C4, C5, k=3, s=2, weight_quant=weight_quant, act_quant=act_quant)                         # 7  P5/32
+        self.b8  = C2f(C5, C5, n=scale_depth(3), shortcut=True, weight_quant=weight_quant, act_quant=act_quant)   # 8
+        self.b9  = SPPF(C5, C5, k=5, weight_quant=weight_quant, act_quant=act_quant)                              # 9
 
         # ---- Neck (PAN-FPN) ----
         # Top-down path
         self.up1  = nn.Upsample(scale_factor=2, mode='nearest')    # 10
         # concat with b6 (P4): C5 + C4 = 256+128 = 384
-        self.n12  = C2f(C5 + C4, C4, n=scale_depth(3), shortcut=False, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width)  # 12
+        self.n12  = C2f(C5 + C4, C4, n=scale_depth(3), shortcut=False, weight_quant=weight_quant, act_quant=act_quant)  # 12
 
         self.up2  = nn.Upsample(scale_factor=2, mode='nearest')    # 13
         # concat with b4 (P3): C4 + C3 = 128+64 = 192
-        self.n15  = C2f(C4 + C3, C3, n=scale_depth(3), shortcut=False, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width)  # 15  P3_out
+        self.n15  = C2f(C4 + C3, C3, n=scale_depth(3), shortcut=False, weight_quant=weight_quant, act_quant=act_quant)  # 15  P3_out
 
         # Bottom-up path
-        self.n16  = Conv(C3, C3, k=3, s=2, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width)                        # 16
+        self.n16  = Conv(C3, C3, k=3, s=2, weight_quant=weight_quant, act_quant=act_quant)                        # 16
         # concat with n12 (P4_up): C3 + C4 = 64+128 = 192
-        self.n18  = C2f(C3 + C4, C4, n=scale_depth(3), shortcut=False, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width)  # 18  P4_out
+        self.n18  = C2f(C3 + C4, C4, n=scale_depth(3), shortcut=False, weight_quant=weight_quant, act_quant=act_quant)  # 18  P4_out
 
-        self.n19  = Conv(C4, C4, k=3, s=2, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width)                        # 19
+        self.n19  = Conv(C4, C4, k=3, s=2, weight_quant=weight_quant, act_quant=act_quant)                        # 19
         # concat with b9 (P5): C4 + C5 = 128+256 = 384
-        self.n21  = C2f(C4 + C5, C5, n=scale_depth(3), shortcut=False, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width)  # 21  P5_out
+        self.n21  = C2f(C4 + C5, C5, n=scale_depth(3), shortcut=False, weight_quant=weight_quant, act_quant=act_quant)  # 21  P5_out
 
         # ---- Detection head ----
-        self.detect = DetectHead(nc=nc, ch=(C3, C4, C5), stride=self.stride, weight_quant=weight_quant, act_quant=act_quant, weight_bit_width=weight_bit_width, act_bit_width=act_bit_width)
+        self.detect = DetectHead(nc=nc, ch=(C3, C4, C5), stride=self.stride, weight_quant=weight_quant, act_quant=act_quant)
 
         # Strides registered as a buffer so they survive .to(device) and are
         # always accessible via model.stride — required by the Ultralytics
