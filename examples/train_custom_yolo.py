@@ -243,7 +243,7 @@ def main():
         )
     )
 
-    trainer.add_callback("on_train_batch_end", stop_early)
+    # trainer.add_callback("on_train_batch_end", stop_early)
     trainer.train()
 
     # trainer.save_dir is the actual run directory (e.g. .../train-10/weights/)
