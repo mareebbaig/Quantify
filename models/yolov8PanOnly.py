@@ -79,6 +79,9 @@ class YOLOv8nPANOnly(nn.Module):
         # ---- Detection head ----
         # Detects from [P3 (raw), P4_out, P5_out]
         self.detect = DetectHead(nc=nc, ch=(C3, C4, C5), stride=self.stride, weight_quant=weight_quant, act_quant=act_quant)
+        
+        # Ultralytics v8DetectionLoss expects model.model[-1] to be the Detect head
+        self.model = [self.detect]
 
 
     # ------------------------------------------------------------------
