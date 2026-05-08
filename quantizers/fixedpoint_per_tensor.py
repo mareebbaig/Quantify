@@ -50,38 +50,7 @@ except ImportError:
 
 from torch.autograd import Function
 from torch.onnx import symbolic_helper
-
-# ---------------------------------------------------------------------------
-# Quantizer Manager
-# ----------------------------------------------------------------------------
-
-class FixedPointQuantManager:
-    """
-    Manager object shared across all Fixed-Point quantizers.
-    Used for global coordination, such as forcing re-calibration 
-    or tracking global quantization statistics.
-    """
-    def __init__(self):
-        # Global flag to force all quantizers to re-run LSB search
-        self.force_recalibration = False
-        # Registry to keep track of all active quantizer instances
-        self.quantizers = []
-
-    def register_quantizer(self, quantizer):
-        """Registers a quantizer instance with the manager."""
-        if quantizer not in self.quantizers:
-            self.quantizers.append(quantizer)
-
-    def trigger_global_recalibration(self):
-        """Sets the flag to force all quantizers to re-calibrate on next forward."""
-        self.force_recalibration = True
-
-    def reset_global_flag(self):
-        """Resets the global recalibration flag."""
-        self.force_recalibration = False
-
-# Global singleton instance
-fixed_point_manager = FixedPointQuantManager()
+from quantizers.manager import quantizer_manager as fixed_point_manager
 
 # ---------------------------------------------------------------------------
 # Core fixed-point quantization

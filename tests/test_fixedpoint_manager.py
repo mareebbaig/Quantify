@@ -2,9 +2,9 @@ import torch
 import unittest
 from quantizers.fixedpoint_per_tensor import (
     FixedPointPerTensorQuantizer, 
-    fixed_point_manager, 
     RoundingMode
 )
+from quantizers.manager import quantizer_manager as fixed_point_manager
 
 class TestFixedPointManager(unittest.TestCase):
     def setUp(self):

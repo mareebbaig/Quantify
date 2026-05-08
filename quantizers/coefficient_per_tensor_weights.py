@@ -22,6 +22,7 @@ from typing import Tuple
 from brevitas.inject import BaseInjector as Injector
 from brevitas.inject.enum import QuantType
 from brevitas.proxy.parameter_quant import WeightQuantProxyFromInjector
+from quantizers.manager import quantizer_manager
 
 
 class CoefficientPerTensorWeightQuantizer(nn.Module):
@@ -60,6 +61,9 @@ class CoefficientPerTensorWeightQuantizer(nn.Module):
         self.register_buffer('best_set_idx', torch.tensor(0, dtype=torch.long))
         self.register_buffer('best_n', torch.tensor(0, dtype=torch.long))
 
+        # Register this instance with the shared manager
+        quantizer_manager.register_quantizer(self)
+
     def forward(
         self, weights: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -80,7 +84,10 @@ class CoefficientPerTensorWeightQuantizer(nn.Module):
         device = weights.device
         dtype = weights.dtype
 
-        if not self.search_done.item():
+        # Check if we need to search (either first time or global recalibration triggered)
+        should_search = not self.search_done.item() or quantizer_manager.force_recalibration
+
+        if should_search:
             best_sad = float("inf")
             best_set_idx = 0
             best_n = 0
