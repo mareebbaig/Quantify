@@ -23,40 +23,38 @@ class SimpleMNISTNet(nn.Module):
         
         # Layer 1: Conv -> ReLU -> Pool
         self.conv1 = qnn.QuantConv2d(
-            1, 16, kernel_size=3, 
+            1, 16, kernel_size=3, stride=2,
             weight_quant=FixedPointPerTensorWeightQuant,
-            input_quant=FixedPointPerTensorActivationQuant
+            output_quant=FixedPointPerTensorActivationQuant
         )
         self.relu1 = qnn.QuantReLU(
             act_quant=FixedPointPerTensorActivationQuant
         )
-        self.pool1 = nn.MaxPool2d(2)
-        
+
         # Layer 2: Conv -> ReLU -> Pool
         self.conv2 = qnn.QuantConv2d(
-            16, 32, kernel_size=3, 
+            16, 32, kernel_size=3,  stride=2,
             weight_quant=FixedPointPerTensorWeightQuant,
-            input_quant=FixedPointPerTensorActivationQuant
+            output_quant=FixedPointPerTensorActivationQuant
         )
         self.relu2 = qnn.QuantReLU(
             act_quant=FixedPointPerTensorActivationQuant
         )
-        self.pool2 = nn.MaxPool2d(2)
-        
+
         self.flatten = nn.Flatten()
         
         # Final Linear Layer
         # Input size: 32 channels * 5x5 spatial (after two 2x2 pools and two 3x3 convs)
         self.fc = qnn.QuantLinear(
-            32 * 5 * 5, 10, 
+            32 * 6 * 6, 10,
             weight_quant=FixedPointPerTensorWeightQuant,
-            input_quant=FixedPointPerTensorActivationQuant
+            output_quant=FixedPointPerTensorActivationQuant
         )
 
     def forward(self, x):
         x = self.input_quant(x)
-        x = self.pool1(self.relu1(self.conv1(x)))
-        x = self.pool2(self.relu2(self.conv2(x)))
+        x = self.relu1(self.conv1(x))
+        x = self.relu2(self.conv2(x))
         x = self.flatten(x)
         x = self.fc(x)
         return x
