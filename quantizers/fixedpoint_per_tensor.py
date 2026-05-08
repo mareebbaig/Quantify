@@ -3,8 +3,8 @@ Fixed-Point Per-Tensor Weight Quantizer for Brevitas.
 
 This quantizer represents weights using fixed-point arithmetic with configurable
 bit-width and rounding mode. The MSB/LSB positions and signed/unsigned mode
-are automatically determined from the weight tensor to maximize the number
-of unique representable values while minimizing quantization error.
+are automatically determined from the weight tensor to maximize the number of
+unique representable values while minimizing quantization error.
 
 Fixed-point representation:
     Given msb and lsb (both integers), the step size is 2^lsb.
@@ -50,6 +50,38 @@ except ImportError:
 
 from torch.autograd import Function
 from torch.onnx import symbolic_helper
+
+# ---------------------------------------------------------------------------
+# Quantizer Manager
+# ----------------------------------------------------------------------------
+
+class FixedPointQuantManager:
+    """
+    Manager object shared across all Fixed-Point quantizers.
+    Used for global coordination, such as forcing re-calibration 
+    or tracking global quantization statistics.
+    """
+    def __init__(self):
+        # Global flag to force all quantizers to re-run LSB search
+        self.force_recalibration = False
+        # Registry to keep track of all active quantizer instances
+        self.quantizers = []
+
+    def register_quantizer(self, quantizer):
+        """Registers a quantizer instance with the manager."""
+        if quantizer not in self.quantizers:
+            self.quantizers.append(quantizer)
+
+    def trigger_global_recalibration(self):
+        """Sets the flag to force all quantizers to re-calibrate on next forward."""
+        self.force_recalibration = True
+
+    def reset_global_flag(self):
+        """Resets the global recalibration flag."""
+        self.force_recalibration = False
+
+# Global singleton instance
+fixed_point_manager = FixedPointQuantManager()
 
 # ---------------------------------------------------------------------------
 # Core fixed-point quantization
@@ -270,6 +302,9 @@ class FixedPointPerTensorQuantizer(nn.Module):
         self.register_buffer('search_result_is_signed', torch.tensor(True, dtype=torch.bool))
         self.register_buffer('search_result_lsb', torch.tensor(0, dtype=torch.long))
 
+        # Register this instance with the shared manager
+        fixed_point_manager.register_quantizer(self)
+
     # ---- public helpers --------------------------------------------------
 
     def detect_signed(self, inputs: torch.Tensor) -> bool:
@@ -298,7 +333,10 @@ class FixedPointPerTensorQuantizer(nn.Module):
         # Avoid tracing/export issues with control flow and .item() calls
         is_exporting = torch.onnx.is_in_onnx_export()
         
-        if not is_exporting and not self.search_done.item():
+        # Check both the local buffer AND the global manager's flag
+        should_calibrate = not self.search_done.item() or fixed_point_manager.force_recalibration
+        
+        if not is_exporting and should_calibrate:
             signed = self.detect_signed(inputs)
             lsb, num_unique = find_optimal_lsb(
                 inputs,
@@ -374,8 +412,6 @@ class FixedPointPerTensorActivationQuant(Injector):
     quantizer.
 
     Usage::
-
-        from brevitas.nn import QuantReLU
         act = QuantReLU(act_quant=FixedPointPerTensorActivationQuant)
     """
 
