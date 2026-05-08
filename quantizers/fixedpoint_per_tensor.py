@@ -50,7 +50,7 @@ except ImportError:
 
 from torch.autograd import Function
 from torch.onnx import symbolic_helper
-from quantizers.manager import quantizer_manager as fixed_point_manager
+from quantizers.manager import quantizer_manager
 
 # ---------------------------------------------------------------------------
 # Core fixed-point quantization
@@ -265,6 +265,7 @@ class FixedPointPerTensorQuantizer(nn.Module):
         self.bit_width = bit_width
         self.rounding_mode = rounding_mode
         self.narrow_range = narrow_range
+        self.inference_counter = 0
 
         # Register search results as buffers to ensure they are serialized in state_dict
         self.register_buffer('search_done', torch.tensor(False, dtype=torch.bool))
@@ -272,7 +273,7 @@ class FixedPointPerTensorQuantizer(nn.Module):
         self.register_buffer('search_result_lsb', torch.tensor(0, dtype=torch.long))
 
         # Register this instance with the shared manager
-        fixed_point_manager.register_quantizer(self)
+        quantizer_manager.register_quantizer(self)
 
     # ---- public helpers --------------------------------------------------
 
@@ -299,13 +300,28 @@ class FixedPointPerTensorQuantizer(nn.Module):
         bit_width : torch.Tensor
             The bit-width as a float tensor.
         """
+        if self.inference_sequence_id == -1:
+            self.inference_sequence_id = quantizer_manager.get_inference_sequence_id()
+
+        perform_quantization = True
+
+        if not quantizer_manager.quantization_is_enabled_globally:
+            perform_quantization = False
+        elif self.inference_counter < self.inference_sequence_id * quantizer_manager.quantization_start_gap:
+            self.inference_counter += 1
+            perform_quantization = False
+
+        if not perform_quantization:
+            return inputs, torch.tensor(float(1), dtype=inputs.dtype, device=inputs.device), torch.tensor(float(0), dtype=inputs.dtype, device=inputs.device), torch.tensor(float(self.bit_width), dtype=inputs.dtype, device=inputs.device)
+
         # Avoid tracing/export issues with control flow and .item() calls
         is_exporting = torch.onnx.is_in_onnx_export()
         
         # Check both the local buffer AND the global manager's flag
-        should_calibrate = not self.search_done.item() or fixed_point_manager.force_recalibration
-        
+        should_calibrate = not self.search_done.item() or quantizer_manager.force_recalibration
+
         if not is_exporting and should_calibrate:
+            print("NOW CALIBRATING", self.inference_sequence_id)
             signed = self.detect_signed(inputs)
             lsb, num_unique = find_optimal_lsb(
                 inputs,

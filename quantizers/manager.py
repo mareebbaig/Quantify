@@ -7,10 +7,17 @@ class QuantizerManager:
     def __init__(self):
         # Global flag to force all quantizers to re-run their search/calibration
         self.force_recalibration = False
+        self.quantization_is_enabled_globally = True
+        self.quantization_start_gap = 10
         # Registry to keep track of all active quantizer instances {id: quantizer}
         self.quantizers = {}
         # Counter to generate unique identifiers
         self._id_counter = 0
+        self._inference_sequence_id_counter = 0
+
+    def stop_quantization_for_n_inferences(self, n):
+        for quant in self.quantizers.values():
+            quant.inference_counter = -n
 
     def register_quantizer(self, quantizer):
         """
@@ -24,8 +31,13 @@ class QuantizerManager:
         
         # Assign the unique ID back to the quantizer object for easy reference
         quantizer.quant_id = qid
-        
+        quantizer.inference_sequence_id = -1
+
         self._id_counter += 1
+
+    def get_inference_sequence_id(self):
+        self._inference_sequence_id_counter += 1
+        return self._inference_sequence_id_counter - 1
 
     def trigger_global_recalibration(self):
         """Sets the flag to force all quantizers to re-calibrate on next forward."""

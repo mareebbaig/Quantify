@@ -42,6 +42,7 @@ class CoefficientPerTensorWeightQuantizer(nn.Module):
     def __init__(self, filepath: str):
         super().__init__()
         self.filepath = filepath
+        self.inference_counter = 0
         
         # Read coefficient sets from the text file during initialization
         self.coefficient_sets = []
@@ -84,10 +85,25 @@ class CoefficientPerTensorWeightQuantizer(nn.Module):
         device = weights.device
         dtype = weights.dtype
 
+        if self.inference_sequence_id == -1:
+            self.inference_sequence_id = quantizer_manager.get_inference_sequence_id()
+
+        perform_quantization = True
+
+        if not quantizer_manager.quantization_is_enabled_globally:
+            perform_quantization = False
+        elif self.inference_counter < self.inference_sequence_id * quantizer_manager.quantization_start_gap:
+            self.inference_counter += 1
+            perform_quantization = False
+
+        if not perform_quantization:
+            return weights, torch.tensor(float(1), dtype=weights.dtype, device=weights.device), torch.tensor(float(0), dtype=weights.dtype, device=weights.device), torch.tensor(float(9), device=device)
+
         # Check if we need to search (either first time or global recalibration triggered)
         should_search = not self.search_done.item() or quantizer_manager.force_recalibration
 
         if should_search:
+            print("NOW CALIBRATING", self.inference_sequence_id)
             best_sad = float("inf")
             best_set_idx = 0
             best_n = 0
