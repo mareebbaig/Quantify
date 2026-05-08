@@ -9,17 +9,23 @@ from quantizers.manager import quantizer_manager as fixed_point_manager
 class TestFixedPointManager(unittest.TestCase):
     def setUp(self):
         # Clear the manager's registry and flags before each test
-        fixed_point_manager.quantizers = []
+        fixed_point_manager.quantizers = {}
+        fixed_point_manager._id_counter = 0
         fixed_point_manager.reset_global_flag()
 
     def test_quantizer_registration(self):
-        """Verify that quantizer instances are automatically registered with the manager."""
+        """Verify that quantizer instances are automatically registered with the manager and given IDs."""
         q1 = FixedPointPerTensorQuantizer(bit_width=8)
         q2 = FixedPointPerTensorQuantizer(bit_width=4)
         
-        self.assertIn(q1, fixed_point_manager.quantizers)
-        self.assertIn(q2, fixed_point_manager.quantizers)
+        self.assertIn(q1, fixed_point_manager.quantizers.values())
+        self.assertIn(q2, fixed_point_manager.quantizers.values())
         self.assertEqual(len(fixed_point_manager.quantizers), 2)
+        
+        # Verify unique IDs were assigned
+        self.assertTrue(hasattr(q1, 'quant_id'))
+        self.assertTrue(hasattr(q2, 'quant_id'))
+        self.assertNotEqual(q1.quant_id, q2.quant_id)
 
     def test_global_recalibration(self):
         """Verify that trigger_global_recalibration forces a re-run of LSB search."""

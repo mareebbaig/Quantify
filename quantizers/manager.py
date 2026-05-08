@@ -7,13 +7,25 @@ class QuantizerManager:
     def __init__(self):
         # Global flag to force all quantizers to re-run their search/calibration
         self.force_recalibration = False
-        # Registry to keep track of all active quantizer instances
-        self.quantizers = []
+        # Registry to keep track of all active quantizer instances {id: quantizer}
+        self.quantizers = {}
+        # Counter to generate unique identifiers
+        self._id_counter = 0
 
     def register_quantizer(self, quantizer):
-        """Registers a quantizer instance with the manager."""
-        if quantizer not in self.quantizers:
-            self.quantizers.append(quantizer)
+        """
+        Registers a quantizer instance with the manager and assigns it a unique ID.
+        """
+        if quantizer in self.quantizers.values():
+            return
+
+        qid = f"quant_{self._id_counter}"
+        self.quantizers[qid] = quantizer
+        
+        # Assign the unique ID back to the quantizer object for easy reference
+        quantizer.quant_id = qid
+        
+        self._id_counter += 1
 
     def trigger_global_recalibration(self):
         """Sets the flag to force all quantizers to re-calibrate on next forward."""
