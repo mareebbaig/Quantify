@@ -13,6 +13,8 @@ import torch.nn as nn
 from abc import ABC, abstractmethod
 from typing import Tuple, Any
 
+from quantizers.manager import quantizer_manager
+
 
 class BaseQuantizer(nn.Module, ABC):
     """
@@ -38,6 +40,9 @@ class BaseQuantizer(nn.Module, ABC):
         
         # Calibration state buffers
         self.register_buffer('search_done', torch.tensor(False, dtype=torch.bool))
+        
+        # Register with global manager for coordination
+        quantizer_manager.register_quantizer(self)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         # 1. Inference gating
@@ -55,11 +60,13 @@ class BaseQuantizer(nn.Module, ABC):
 
         # 2. Calibration check
         is_exporting = torch.onnx.is_in_onnx_export()
-        should_calibrate = not self.search_done.item()
+        should_calibrate = not self.search_done.item() or quantizer_manager.force_recalibration
         
         if not is_exporting and should_calibrate:
             params = self._calibrate(x)
             self._save_calibration(params)
+            # Reset global flag after triggering recalibration to avoid forcing it on every forward
+            quantizer_manager.reset_global_flag()
         else:
             params = self._load_calibration()
             
