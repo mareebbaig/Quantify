@@ -19,9 +19,7 @@ import torch
 import torch.nn as nn
 from typing import Tuple
 
-from brevitas.inject import BaseInjector as Injector
-from brevitas.inject.enum import QuantType
-from brevitas.proxy.parameter_quant import WeightQuantProxyFromInjector
+from quantizers.base_injector import BaseWeightQuant
 from quantizers.manager import quantizer_manager
 
 
@@ -154,7 +152,7 @@ class CoefficientPerTensorWeightQuantizer(nn.Module):
         return quantized, scale, zero_point, bw
 
 
-class CoefficientPerTensorWeightQuant(Injector):
+class CoefficientPerTensorWeightQuant(BaseWeightQuant):
     """
     Brevitas-compatible Injector for the coefficient-based per-tensor weight
     quantizer.
@@ -173,12 +171,6 @@ class CoefficientPerTensorWeightQuant(Injector):
             filepath = "my_custom_coeffs.txt"
     """
 
-    quant_type = QuantType.INT
-    proxy_class = WeightQuantProxyFromInjector
     tensor_quant = CoefficientPerTensorWeightQuantizer
-    
-    # Path to the text file containing coefficient sets. 
-    # This will be passed to the CoefficientPerTensorWeightQuantizer constructor.
     filepath = "coefficients.txt"
-    
-    signed = True
+    # signed inherited from BaseWeightQuant (True)

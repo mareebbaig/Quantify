@@ -31,23 +31,7 @@ from typing import Tuple, Optional, Any
 import torch
 import torch.nn as nn
 
-from brevitas.inject import BaseInjector as Injector
-from brevitas.inject.enum import QuantType
-from brevitas.proxy.parameter_quant import WeightQuantProxyFromInjector
-try:
-    from brevitas.proxy.runtime_quant import ActQuantProxyFromInjector as ActivationQuantProxyFromInjector
-except ImportError:
-    try:
-        from brevitas.proxy.activation_quant import ActivationQuantProxyFromInjector
-    except ImportError:
-        try:
-            from brevitas.proxy.activation import ActivationQuantProxyFromInjector
-        except ImportError:
-            raise ImportError(
-                "Could not find ActivationQuantProxyFromInjector. "
-                "Please ensure you have a compatible version of Brevitas installed."
-            )
-
+from quantizers.base_injector import BaseWeightQuant, BaseActivationQuant
 from torch.autograd import Function
 from torch.onnx import symbolic_helper
 from quantizers.base_quantizer import BaseQuantizer
@@ -327,7 +311,7 @@ class FixedPointPerTensorQuantizer(BaseQuantizer):
 # Brevitas Injector — plug into QuantLinear, QuantConv2d, etc.
 # ---------------------------------------------------------------------------
 
-class FixedPointPerTensorWeightQuant(Injector):
+class FixedPointPerTensorWeightQuant(BaseWeightQuant):
     """
     Brevitas-compatible Injector for the fixed-point per-tensor weight
     quantizer.
@@ -349,21 +333,14 @@ class FixedPointPerTensorWeightQuant(Injector):
             rounding_mode = RoundingMode.FLOOR
     """
 
-    quant_type = QuantType.INT
-    proxy_class = WeightQuantProxyFromInjector
-    bit_width = 8
     rounding_mode = RoundingMode.ROUND_TO_NEAREST_EVEN
     narrow_range = True
     tensor_quant = FixedPointPerTensorQuantizer
-    
-    # For Brevitas compatibility, we need to ensure signed is a proper boolean value.
-    # The actual signedness is determined by the tensor_quant module at runtime,
-    # but the proxy requires a boolean attribute to initialize the IntQuantTensor.
-    signed = True
+    # signed inherited from BaseWeightQuant (True)
 
 
 # ------ Brevitas Injector ------
-class FixedPointPerTensorActivationQuant(Injector):
+class FixedPointPerTensorActivationQuant(BaseActivationQuant):
     """
     Brevitas-compatible Injector for the fixed-point per-tensor activation
     quantizer.
@@ -372,10 +349,7 @@ class FixedPointPerTensorActivationQuant(Injector):
         act = QuantReLU(act_quant=FixedPointPerTensorActivationQuant)
     """
 
-    quant_type = QuantType.INT
-    proxy_class = ActivationQuantProxyFromInjector
-    bit_width = 8
     rounding_mode = RoundingMode.ROUND_TO_NEAREST_EVEN
     narrow_range = True
     tensor_quant = FixedPointPerTensorQuantizer
-    signed = False  # Activations are often unsigned, but detection handles it dynamically
+    # signed inherited from BaseActivationQuant (False)
