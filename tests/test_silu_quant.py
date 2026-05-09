@@ -37,10 +37,10 @@ class TestSiLUQuantization:
     """Tests for the SiLU activation followed by fixed-point quantization."""
 
     def test_silu_output_range(self):
-        """SiLU output should be in [0, max_input)."""
+        """SiLU output is bounded below by ~-0.28 and above by max_input."""
         x = torch.randn(100)
         x_silu = torch.nn.functional.silu(x)
-        assert (x_silu >= 0).all()
+        assert (x_silu >= -0.28).all()
         assert (x_silu <= x.max()).all()
 
     def test_silu_quantization_preserves_grid(self):
