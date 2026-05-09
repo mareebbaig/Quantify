@@ -26,7 +26,7 @@ Example (signed, bit_width=4, lsb=-1):
 
 import math
 from enum import Enum
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Any
 
 import torch
 import torch.nn as nn
@@ -50,7 +50,7 @@ except ImportError:
 
 from torch.autograd import Function
 from torch.onnx import symbolic_helper
-from quantizers.manager import quantizer_manager
+from quantizers.base_quantizer import BaseQuantizer
 
 # ---------------------------------------------------------------------------
 # Core fixed-point quantization
@@ -241,7 +241,7 @@ class FixedPointQuantFn(Function):
 # Torch Module — usable as a standalone quantizer
 # ---------------------------------------------------------------------------
 
-class FixedPointPerTensorQuantizer(nn.Module):
+class FixedPointPerTensorQuantizer(BaseQuantizer):
     """
     A self-contained fixed-point per-tensor quantizer.
 
@@ -261,94 +261,66 @@ class FixedPointPerTensorQuantizer(nn.Module):
         rounding_mode: RoundingMode = RoundingMode.ROUND_TO_NEAREST_EVEN,
         narrow_range: bool = True,
     ):
-        super().__init__()
-        self.bit_width = bit_width
+        super().__init__(bit_width=bit_width)
         self.rounding_mode = rounding_mode
         self.narrow_range = narrow_range
-        self.inference_counter = 0
-
+        
         # Register search results as buffers to ensure they are serialized in state_dict
-        self.register_buffer('search_done', torch.tensor(False, dtype=torch.bool))
         self.register_buffer('search_result_is_signed', torch.tensor(True, dtype=torch.bool))
         self.register_buffer('search_result_lsb', torch.tensor(0, dtype=torch.long))
 
-        # Register this instance with the shared manager
-        quantizer_manager.register_quantizer(self)
+    def _calibrate(self, x: torch.Tensor) -> Any:
+        """Run calibration/search logic and return a params dict."""
+        signed = self.detect_signed(x)
+        lsb, num_unique = find_optimal_lsb(
+            x,
+            self.bit_width,
+            signed,
+            self.rounding_mode,
+            self.narrow_range,
+        )
+        return {'lsb': lsb, 'signed': signed, 'num_unique': num_unique}
 
-    # ---- public helpers --------------------------------------------------
+    def _save_calibration(self, params: Any) -> None:
+        """Save calibration results to buffers."""
+        self.search_result_is_signed.fill_(params['signed'])
+        self.search_result_lsb.fill_(params['lsb'])
+        if params['num_unique'] > 1:
+            self.search_done.fill_(True)
+        else:
+            self.search_done.fill_(False)
+
+    def _load_calibration(self) -> Any:
+        """Load calibration results from buffers."""
+        return {
+            'lsb': self.search_result_lsb.item(),
+            'signed': self.search_result_is_signed.item()
+        }
+
+    def _quantize(self, x: torch.Tensor, params: Any) -> torch.Tensor:
+        """Apply quantization using the provided parameters."""
+        quantized, _, _, _ = FixedPointQuantFn.apply(
+            x,
+            torch.tensor(2.0 ** params['lsb'], dtype=x.dtype, device=x.device),
+            torch.tensor(0.0, dtype=x.dtype, device=x.device),
+            params['lsb'],
+            self.bit_width,
+            params['signed'],
+            self.narrow_range,
+            self.rounding_mode
+        )
+        return quantized
+
+    def _get_metadata(self, params: Any, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return scale, zero_point, and bit_width tensors matching x's dtype/device."""
+        scale = torch.tensor(2.0 ** params['lsb'], dtype=x.dtype, device=x.device)
+        zero_point = torch.tensor(0.0, dtype=x.dtype, device=x.device)
+        bit_width = torch.tensor(float(self.bit_width), dtype=x.dtype, device=x.device)
+        return scale, zero_point, bit_width
 
     def detect_signed(self, inputs: torch.Tensor) -> bool:
         """Return True if any input is negative."""
         return bool((inputs < 0).any().item())
-
-    # ---- forward ---------------------------------------------------------
-
-    def forward(
-        self, inputs: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Quantize *inputs* and return a Brevitas-style 4-tuple.
-
-        Returns
-        -------
-        quantized : torch.Tensor
-            inputs snapped to the fixed-point grid (dequantized form).
-        scale : torch.Tensor
-            Scalar step size ``2 ** lsb``.
-        zero_point : torch.Tensor
-            Always 0 for this quantizer.
-        bit_width : torch.Tensor
-            The bit-width as a float tensor.
-        """
-        if self.inference_sequence_id == -1:
-            self.inference_sequence_id = quantizer_manager.get_inference_sequence_id()
-
-        perform_quantization = True
-
-        if not quantizer_manager.quantization_is_enabled_globally:
-            perform_quantization = False
-        elif self.inference_counter < self.inference_sequence_id * quantizer_manager.quantization_start_gap:
-            self.inference_counter += 1
-            perform_quantization = False
-
-        if not perform_quantization:
-            return inputs, torch.tensor(float(1), dtype=inputs.dtype, device=inputs.device), torch.tensor(float(0), dtype=inputs.dtype, device=inputs.device), torch.tensor(float(self.bit_width), dtype=inputs.dtype, device=inputs.device)
-
-        # Avoid tracing/export issues with control flow and .item() calls
-        is_exporting = torch.onnx.is_in_onnx_export()
-        
-        # Check both the local buffer AND the global manager's flag
-        should_calibrate = not self.search_done.item() or quantizer_manager.force_recalibration
-
-        if not is_exporting and should_calibrate:
-            print("NOW CALIBRATING", self.inference_sequence_id)
-            signed = self.detect_signed(inputs)
-            lsb, num_unique = find_optimal_lsb(
-                inputs,
-                self.bit_width,
-                signed,
-                self.rounding_mode,
-                self.narrow_range,
-            )
-            self.search_result_is_signed.fill_(signed)
-            self.search_result_lsb.fill_(lsb)
-            if num_unique > 1:
-                self.search_done.fill_(True)
-            else:
-                self.search_done.fill_(False)
-        else:
-            signed = self.search_result_is_signed.item()
-            lsb = self.search_result_lsb.item()
-
-        # Brevitas compatibility tensors
-        step = 2.0 ** lsb
-        scale = torch.tensor(step, dtype=inputs.dtype, device=inputs.device)
-        zero_point = torch.tensor(0.0, dtype=inputs.dtype, device=inputs.device)
-
-        # Route through custom autograd.Function to trigger ONNX symbolic export
-        return FixedPointQuantFn.apply(
-            inputs, scale, zero_point, lsb, self.bit_width, signed, self.narrow_range, self.rounding_mode
-        )
 
 
 # ---------------------------------------------------------------------------
