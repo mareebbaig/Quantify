@@ -101,8 +101,8 @@ class CoefficientPerTensorWeightQuantizer(BaseQuantizer):
         """Return scale, zero_point, and bit_width tensors matching x's dtype/device."""
         scale = torch.tensor(2.0 ** params['n'], dtype=x.dtype, device=x.device)
         zero_point = torch.tensor(0.0, dtype=x.dtype, device=x.device)
-        # Bit width is passed via constructor, not derived from coefficient count
-        bit_width = torch.tensor(float(self.bit_width), dtype=x.dtype, device=x.device)
+        # Bit width corresponds to the number of coefficients in the chosen set
+        bit_width = torch.tensor(float(len(self.coefficient_sets[params['set_idx']])), dtype=x.dtype, device=x.device)
         return scale, zero_point, bit_width
 
 
