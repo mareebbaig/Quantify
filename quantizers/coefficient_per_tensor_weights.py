@@ -21,6 +21,47 @@ from typing import Tuple, Any
 
 from quantizers.base_injector import BaseWeightQuant
 from quantizers.base_quantizer import BaseQuantizer
+from torch.autograd import Function
+from torch.onnx import symbolic_helper
+
+
+class CoefficientQuantFn(Function):
+    """Symbolic shim: emits a single `mydomain::CoefficientQuant` ONNX node."""
+
+    @staticmethod
+    def symbolic(g, x, coefficients, n, bit_width, signed):
+        coeffs_val = symbolic_helper._maybe_get_const(coefficients, "t")
+        
+        quantized = g.op(
+            "mydomain::CoefficientQuant",
+            x,
+            coefficients_t=coeffs_val,
+            n_i=int(n),
+            bit_width_i=int(bit_width),
+            signed_i=int(signed),
+        ).setType(x.type())
+        
+        # Brevitas expects a 4-tuple output; create auxiliary constants
+        scale = g.op("Constant", value_t=torch.tensor(2.0 ** n))
+        zero_point = g.op("Constant", value_t=torch.tensor(0.0))
+        bw = g.op("Constant", value_t=torch.tensor(float(bit_width)))
+        return quantized, scale, zero_point, bw
+
+    @staticmethod
+    def forward(ctx, x, coefficients, n, bit_width, signed):
+        ctx.save_for_backward(x)
+        s = 2.0 ** n
+        scaled_coeffs = coefficients * s
+        diffs = torch.abs(x.unsqueeze(-1) - scaled_coeffs)
+        min_indices = torch.argmin(diffs, dim=-1)
+        quantized = scaled_coeffs[min_indices]
+        bw = torch.tensor(float(bit_width), dtype=x.dtype, device=x.device)
+        return quantized, torch.tensor(s, dtype=x.dtype, device=x.device), torch.tensor(0.0, dtype=x.dtype, device=x.device), bw
+
+    @staticmethod
+    def backward(ctx, grad_quantized, grad_scale, grad_zero_point, grad_bw):
+        # Straight-Through Estimator: pass gradient through for the first input
+        return grad_quantized, None, None, None, None
 
 
 class CoefficientPerTensorWeightQuantizer(BaseQuantizer):
@@ -88,6 +129,17 @@ class CoefficientPerTensorWeightQuantizer(BaseQuantizer):
 
     def _quantize(self, x: torch.Tensor, params: Any) -> torch.Tensor:
         """Apply quantization using the provided parameters."""
+        if torch.onnx.is_in_onnx_export():
+            chosen_coeffs = self.coefficient_sets[params['set_idx']].to(x.device)
+            quantized, _, _, _ = CoefficientQuantFn.apply(
+                x,
+                chosen_coeffs,
+                params['n'],
+                len(self.coefficient_sets[params['set_idx']]),
+                1  # signed
+            )
+            return quantized
+            
         chosen_coeffs = self.coefficient_sets[params['set_idx']].to(x.device)
         s = 2.0 ** params['n']
         scaled_coeffs = chosen_coeffs * s
