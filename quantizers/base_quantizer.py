@@ -2,10 +2,10 @@
 Base Quantizer Infrastructure for Brevitas.
 
 Provides shared boilerplate for per-tensor quantizers, including:
-- Manager integration & inference gating
 - Calibration state management
 - ONNX export guards
 - Brevitas 4-tuple return contract
+- Configurable inference gating (decoupled from global state)
 """
 
 import torch
@@ -13,39 +13,38 @@ import torch.nn as nn
 from abc import ABC, abstractmethod
 from typing import Tuple, Any
 
-from quantizers.manager import quantizer_manager
-
 
 class BaseQuantizer(nn.Module, ABC):
     """
     Abstract base class for per-tensor quantizers.
     
-    Handles manager registration, inference gating, calibration state,
-    and ONNX export guards. Subclasses implement domain-specific calibration
-    and quantization math.
+    Handles calibration state, ONNX export guards, and Brevitas 4-tuple return contract.
+    Subclasses implement domain-specific calibration and quantization math.
+    Gating is now configurable per-instance to avoid global state coupling.
     """
 
-    def __init__(self, bit_width: int = 8, **kwargs):
+    def __init__(
+        self,
+        bit_width: int = 8,
+        quantization_start_gap: int = 0,
+        quantization_is_enabled_globally: bool = True,
+        **kwargs
+    ):
         super().__init__()
         self.bit_width = bit_width
+        self.quantization_start_gap = quantization_start_gap
+        self.quantization_is_enabled_globally = quantization_is_enabled_globally
         self.inference_counter = 0
-        self.inference_sequence_id = -1
         
         # Calibration state buffers
         self.register_buffer('search_done', torch.tensor(False, dtype=torch.bool))
-        
-        # Register with global manager
-        quantizer_manager.register_quantizer(self)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         # 1. Inference gating
-        if self.inference_sequence_id == -1:
-            self.inference_sequence_id = quantizer_manager.get_inference_sequence_id()
-            
         perform_quantization = True
-        if not quantizer_manager.quantization_is_enabled_globally:
+        if not self.quantization_is_enabled_globally:
             perform_quantization = False
-        elif self.inference_counter < self.inference_sequence_id * quantizer_manager.quantization_start_gap:
+        elif self.inference_counter < self.quantization_start_gap:
             self.inference_counter += 1
             perform_quantization = False
             
@@ -56,7 +55,7 @@ class BaseQuantizer(nn.Module, ABC):
 
         # 2. Calibration check
         is_exporting = torch.onnx.is_in_onnx_export()
-        should_calibrate = not self.search_done.item() or quantizer_manager.force_recalibration
+        should_calibrate = not self.search_done.item()
         
         if not is_exporting and should_calibrate:
             params = self._calibrate(x)
