@@ -167,12 +167,15 @@ def find_optimal_lsb(
 class RoundingMode(Enum):
     ROUND_TO_NEAREST_EVEN = "round_to_nearest_even"
     FLOOR = "floor"
+    ROUND = "round"
 
 
 def _round(x: torch.Tensor, mode: RoundingMode) -> torch.Tensor:
     """Round tensor according to the selected rounding mode."""
     if mode is RoundingMode.FLOOR:
         return torch.floor(x)
+    if mode is RoundingMode.ROUND:
+        return torch.floor(x + 0.5)
     # PyTorch's torch.round uses "round half to even" (banker's rounding)
     return torch.round(x)
 
@@ -246,7 +249,7 @@ class FixedPointPerTensorQuantizer(BaseQuantizer):
         self,
         bit_width: int = 8,
         signed: bool = True,
-        rounding_mode: RoundingMode = RoundingMode.ROUND_TO_NEAREST_EVEN,
+        rounding_mode: RoundingMode = RoundingMode.ROUND,
         narrow_range: bool = False,
     ):
         super().__init__(bit_width=bit_width)
@@ -370,7 +373,7 @@ class FixedPointPerTensorActivationQuant(BaseActivationQuant):
         act = QuantReLU(act_quant=FixedPointPerTensorActivationQuant)
     """
 
-    rounding_mode = RoundingMode.ROUND_TO_NEAREST_EVEN
+    rounding_mode = RoundingMode.FLOOR
     narrow_range = False
     signed = False  # Explicitly declared to match proxy expectation
     tensor_quant = FixedPointPerTensorQuantizer
