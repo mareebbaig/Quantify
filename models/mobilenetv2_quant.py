@@ -1,14 +1,14 @@
 import torch
 import torch.nn as nn
 import brevitas.nn as qnn
-from quantizers.fixedpoint_per_tensor_weights import FixedPointPerTensorWeightQuant
+from quantizers.fixedpoint_per_tensor import FixedPointPerTensorWeightQuant
 
 class QuantInvertedResidual(nn.Module):
     """Quantized Inverted Residual Block for MobileNetV2.
     
     Mirrors torchvision.models.mobilenetv2._InvertedResidual.
     """
-    def __init__(self, inp, oup, stride, expand_ratio, weight_bit_width, act_bit_width, weight_quant):
+    def __init__(self, inp, oup, stride, expand_ratio, weight_bit_width, act_bit_width, weight_quant, act_quant=None):
         super().__init__()
         self.stride = stride
         self.use_res_connect = stride == 1 and inp == oup
@@ -29,12 +29,12 @@ class QuantInvertedResidual(nn.Module):
             qnn.QuantConv2d(inp, hidden_dim, 1, 1, 0, bias=False, 
                             weight_bit_width=weight_bit_width, weight_quant=weight_quant),
             nn.BatchNorm2d(hidden_dim),
-            qnn.QuantReLU(bit_width=act_bit_width),
+            qnn.QuantReLU(bit_width=act_bit_width, act_quant=act_quant),
             # dw
             qnn.QuantConv2d(hidden_dim, hidden_dim, 3, stride, 1, groups=hidden_dim, bias=False, 
                             weight_bit_width=weight_bit_width, weight_quant=weight_quant),
             nn.BatchNorm2d(hidden_dim),
-            qnn.QuantReLU(bit_width=act_bit_width),
+            qnn.QuantReLU(bit_width=act_bit_width, act_quant=act_quant),
             # pw-linear
             qnn.QuantConv2d(hidden_dim, oup, 1, 1, 0, bias=False, 
                             weight_bit_width=weight_bit_width, weight_quant=weight_quant),
@@ -53,7 +53,7 @@ class QuantMobileNetV2(nn.Module):
     Mirrors the structure of torchvision.models.mobilenet_v2.MobileNet_V2
     to allow easy weight mapping.
     """
-    def __init__(self, num_classes=1000, weight_bit_width=8, act_bit_width=8):
+    def __init__(self, num_classes=1000, weight_bit_width=8, act_bit_width=8, act_quant=None):
         super().__init__()
 
         # Dynamic injector subclass to set bit_width
@@ -78,7 +78,7 @@ class QuantMobileNetV2(nn.Module):
                             weight_bit_width=weight_bit_width, weight_quant=FixedPointWeightQuant)
         )
         self.features.append(nn.BatchNorm2d(32))
-        self.features.append(qnn.QuantReLU(bit_width=act_bit_width))
+        self.features.append(qnn.QuantReLU(bit_width=act_bit_width, act_quant=act_quant))
 
         # Inverted Residual Blocks
         in_channels = 32
@@ -88,7 +88,7 @@ class QuantMobileNetV2(nn.Module):
                 stride = s if i == 0 else 1
                 self.features.append(
                     QuantInvertedResidual(in_channels, c, stride, t, 
-                                           weight_bit_width, act_bit_width, FixedPointWeightQuant)
+                                           weight_bit_width, act_bit_width, FixedPointWeightQuant, act_quant)
                 )
                 in_channels = c
 
@@ -98,7 +98,7 @@ class QuantMobileNetV2(nn.Module):
                             weight_bit_width=weight_bit_width, weight_quant=FixedPointWeightQuant)
         )
         self.features.append(nn.BatchNorm2d(1280))
-        self.features.append(qnn.QuantReLU(bit_width=act_bit_width))
+        self.features.append(qnn.QuantReLU(bit_width=act_bit_width, act_quant=act_quant))
 
         self.features = nn.Sequential(*self.features)
 
