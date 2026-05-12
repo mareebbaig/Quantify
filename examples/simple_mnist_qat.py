@@ -9,6 +9,7 @@ import brevitas.nn as qnn
 from quantizers.fixedpoint_per_tensor import FixedPointPerTensorWeightQuant, FixedPointPerTensorActivationQuant
 from quantizers.coefficient_per_tensor_weights import CoefficientPerTensorWeightQuant
 from quantizers.manager import quantizer_manager
+from utils import export_onnx_with_io
 
 class SimpleMNISTNet(nn.Module):
     """
@@ -26,40 +27,34 @@ class SimpleMNISTNet(nn.Module):
         
         # Layer 1: Conv -> ReLU -> Pool
         self.conv1 = qnn.QuantConv2d(
-            1, 16, kernel_size=3, stride=1,
+            1, 16, kernel_size=3, stride=2,
             weight_quant=CoefficientPerTensorWeightQuant,
             output_quant=FixedPointPerTensorActivationQuant
         )
-        self.relu1 = qnn.QuantReLU(
-            act_quant=FixedPointPerTensorActivationQuant
-        )
-        self.pool1 = nn.MaxPool2d(2)
+        self.relu1 = nn.ReLU()
 
         # Layer 2: Conv -> ReLU -> Pool
         self.conv2 = qnn.QuantConv2d(
-            16, 32, kernel_size=3, stride=1,
+            16, 32, kernel_size=3, stride=2,
             weight_quant=FixedPointPerTensorWeightQuant,
             output_quant=FixedPointPerTensorActivationQuant
         )
-        self.relu2 = qnn.QuantReLU(
-            act_quant=FixedPointPerTensorActivationQuant
-        )
-        self.pool2 = nn.MaxPool2d(2)
+        self.relu2 = nn.ReLU()
 
         self.flatten = nn.Flatten()
         
         # Final Linear Layer
         # Input size: 32 channels * 5x5 spatial (after two 3x3 convs and two 2x2 pools)
         self.fc = qnn.QuantLinear(
-            32 * 5 * 5, 10,
+            32 * 6 * 6, 10,
             weight_quant=FixedPointPerTensorWeightQuant,
             # output_quant=FixedPointPerTensorActivationQuant
         )
 
     def forward(self, x):
         x = self.input_quant(x)
-        x = self.pool1(self.relu1(self.conv1(x)))
-        x = self.pool2(self.relu2(self.conv2(x)))
+        x = self.relu1(self.conv1(x))
+        x = self.relu2(self.conv2(x))
         x = self.flatten(x)
         x = self.fc(x)
         return x
@@ -88,13 +83,13 @@ def train():
 
 
     # --- Load Floating-Point Checkpoint ---
-    checkpoint_path = "simple_mnist_float.pt"
-    try:
-        # strict=False is required because the float state_dict lacks Brevitas quantization parameters
-        model.load_state_dict(torch.load(checkpoint_path, map_location=device), strict=False)
-        print(f"Successfully loaded floating-point checkpoint from {checkpoint_path} for fine-tuning.")
-    except FileNotFoundError:
-        print(f"Checkpoint {checkpoint_path} not found. Training from scratch.")
+    # checkpoint_path = "simple_mnist_float.pt"
+    # try:
+    #     # strict=False is required because the float state_dict lacks Brevitas quantization parameters
+    #     model.load_state_dict(torch.load(checkpoint_path, map_location=device), strict=False)
+    #     print(f"Successfully loaded floating-point checkpoint from {checkpoint_path} for fine-tuning.")
+    # except FileNotFoundError:
+    #     print(f"Checkpoint {checkpoint_path} not found. Training from scratch.")
 
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -138,17 +133,48 @@ def train():
     model.eval()
     dummy_input = torch.randn(1, 1, 28, 28).to(device)
     onnx_path = "simple_mnist_fixedpoint.onnx"
-    
+
     # We MUST use dynamo=False because FixedPointPerTensorQuantizer 
     # uses torch.autograd.Function.symbolic for custom ONNX nodes.
     torch.onnx.export(
         model, 
         dummy_input, 
         onnx_path, 
-        opset_version=13, 
-        custom_opsets={'mydomain': 1}, 
+        opset_version=17,
+        custom_opsets={'Quantify': 1},
         dynamo=False 
     )
+
+    # def export_with_test_vector(model, dummy_input, path):
+    #     model.eval()
+    #
+    #     with torch.no_grad():
+    #         expected_output = model(dummy_input)
+    #
+    #     torch.onnx.export(
+    #         model,
+    #         dummy_input,
+    #         path,
+    #         opset_version=17,
+    #         dynamo=False
+    #     )
+    #
+    #     proto = onnx.load(path)
+    #
+    #     entry1 = onnx.StringStringEntryProto()
+    #     entry1.key = "dummy_input"
+    #     entry1.value = json.dumps(dummy_input.cpu().numpy().tolist())
+    #
+    #     entry2 = onnx.StringStringEntryProto()
+    #     entry2.key = "expected_output"
+    #     entry2.value = json.dumps(expected_output.cpu().numpy().tolist())
+    #
+    #     proto.metadata_props.extend([entry1, entry2])
+    #
+    #     torch.onnx.save(proto, path)
+
+    export_onnx_with_io(model, dummy_input, "simple_mnist_fixedpoint2.onnx")
+
     print(f"Model successfully exported to {onnx_path}")
 
 if __name__ == "__main__":

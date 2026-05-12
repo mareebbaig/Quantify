@@ -26,14 +26,14 @@ from torch.onnx import symbolic_helper
 
 
 class CoefficientQuantFn(Function):
-    """Symbolic shim: emits a single `mydomain::CoefficientQuant` ONNX node."""
+    """Symbolic shim: emits a single `Quantify::CoefficientQuant` ONNX node."""
 
     @staticmethod
     def symbolic(g, x, coefficients, n, bit_width, signed):
         coeffs_val = symbolic_helper._maybe_get_const(coefficients, "t")
         
         quantized = g.op(
-            "mydomain::CoefficientQuant",
+            "Quantify::CoefficientQuant",
             x,
             coefficients_t=coeffs_val,
             n_i=int(n),

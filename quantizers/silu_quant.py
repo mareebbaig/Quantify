@@ -2,7 +2,7 @@
 Quantized SiLU Activation for Brevitas.
 
 Provides a custom quantized SiLU module that applies SiLU followed by
-fixed-point quantization. Emits a custom ONNX node (`mydomain::QuantSiLU`)
+fixed-point quantization. Emits a custom ONNX node (`Quantify::QuantSiLU`)
 during export to preserve exact quantization semantics.
 """
 
@@ -18,7 +18,7 @@ from torch.onnx import symbolic_helper
 
 
 class SiLUQuantFn(Function):
-    """Symbolic shim: emits a single `mydomain::QuantSiLU` ONNX node."""
+    """Symbolic shim: emits a single `Quantify::QuantSiLU` ONNX node."""
 
     @staticmethod
     def symbolic(g, x, scale, zero_point, lsb, bit_width, signed, rounding_mode):
@@ -26,7 +26,7 @@ class SiLUQuantFn(Function):
         zero_point_val = symbolic_helper._maybe_get_const(zero_point, "t")
         
         quantized = g.op(
-            "mydomain::QuantSiLU",
+            "Quantify::QuantSiLU",
             x,
             scale_f=scale_val,
             zero_point_f=zero_point_val,

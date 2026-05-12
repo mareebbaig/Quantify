@@ -2,7 +2,7 @@
 Example: Exporting Brevitas Quantized Models with Custom ONNX Nodes.
 
 This script demonstrates how to override the default ONNX export behavior
-of Brevitas layers to emit custom nodes (e.g., mydomain::CustomQuantConv)
+of Brevitas layers to emit custom nodes (e.g., Quantify::CustomQuantConv)
 with additional attributes (strings, tensors, scalars, booleans).
 
 It shows the simplest, most robust pattern for replacing standard PyTorch/Brevitas
@@ -28,7 +28,7 @@ class CustomQuantConvFn(torch.autograd.Function):
     def symbolic(g, x, weight, bias, stride, padding, bit_width, rounding_mode, is_signed):
         # Emit custom node with various attribute types as requested
         return g.op(
-            "mydomain::CustomQuantConv",
+            "Quantify::CustomQuantConv",
             x, weight, bias,
             stride_i=int(stride),
             padding_i=int(padding),
@@ -54,7 +54,7 @@ class CustomQuantLinearFn(torch.autograd.Function):
     @staticmethod
     def symbolic(g, x, weight, bias, bit_width, rounding_mode, is_signed):
         return g.op(
-            "mydomain::CustomQuantLinear",
+            "Quantify::CustomQuantLinear",
             x, weight, bias,
             bit_width_i=int(bit_width),
             rounding_mode_s=str(rounding_mode),
@@ -131,7 +131,7 @@ def main():
         dynamo=False,  # Force legacy exporter to support torch.autograd.Function.symbolic
     )
     print(f"Model exported to {onnx_path}")
-    print("Open the file in Netron to verify the custom 'mydomain::CustomQuantConv' and 'mydomain::CustomQuantLinear' nodes.")
+    print("Open the file in Netron to verify the custom 'Quantify::CustomQuantConv' and 'Quantify::CustomQuantLinear' nodes.")
 
 
 if __name__ == "__main__":

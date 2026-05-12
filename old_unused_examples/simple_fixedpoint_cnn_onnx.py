@@ -52,14 +52,14 @@ def verify_onnx_model(onnx_path: str) -> bool:
     
     custom_node_found = False
     for node in model.graph.node:
-        if node.op_type == "FixedPointQuant" and node.domain == "mydomain":
+        if node.op_type == "FixedPointQuant" and node.domain == "Quantify":
             custom_node_found = True
             print(f"  Found custom node: {node.op_type} (domain: {node.domain})")
             print(f"    Attributes: {[(a.name, a.i if a.i else a.f if a.f else a.s) for a in node.attribute]}")
             break
             
     if not custom_node_found:
-        print("  WARNING: Custom 'mydomain::FixedPointQuant' node not found in ONNX graph!")
+        print("  WARNING: Custom 'Quantify::FixedPointQuant' node not found in ONNX graph!")
         return False
     return True
 

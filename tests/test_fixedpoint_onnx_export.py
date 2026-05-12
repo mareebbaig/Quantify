@@ -41,13 +41,13 @@ def get_onnx_model(onnx_path: str):
 
 
 def count_custom_nodes(onnx_model):
-    return sum(1 for node in onnx_model.graph.node if node.op_type == "FixedPointQuant" and node.domain == "mydomain")
+    return sum(1 for node in onnx_model.graph.node if node.op_type == "FixedPointQuant" and node.domain == "Quantify")
 
 
 def get_custom_node_attributes(onnx_model):
     attrs = []
     for node in onnx_model.graph.node:
-        if node.op_type == "FixedPointQuant" and node.domain == "mydomain":
+        if node.op_type == "FixedPointQuant" and node.domain == "Quantify":
             attr_dict = {}
             for a in node.attribute:
                 if a.HasField("i"):

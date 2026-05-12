@@ -54,6 +54,6 @@
 - Keep `return_quant_tensor=False` (default) unless specifically required by the architecture or export target.
 
 ## 8. Custom ONNX Nodes Don't Run in ORT
-**When this happens:** You export a model with `mydomain::CustomOp` and expect ONNX Runtime to execute it natively.
-**The Problem:** ORT only executes standard ONNX ops or registered custom kernels. Unregistered `mydomain::` nodes will cause fallback warnings or runtime errors.
+**When this happens:** You export a model with `Quantify::CustomOp` and expect ONNX Runtime to execute it natively.
+**The Problem:** ORT only executes standard ONNX ops or registered custom kernels. Unregistered `Quantify::` nodes will cause fallback warnings or runtime errors.
 **How to Prevent It:** Use custom nodes for graph inspection/export compatibility only. For ORT deployment, convert to QCDQ (`export_onnx_qcdq`) or implement a custom ORT kernel.

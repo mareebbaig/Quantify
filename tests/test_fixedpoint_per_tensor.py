@@ -633,7 +633,7 @@ class TestONNXExportIntegration(unittest.TestCase):
         try:
             import onnx
             onnx_model = onnx.load(onnx_path)
-            custom_nodes = [n for n in onnx_model.graph.node if n.op_type == "FixedPointQuant" and n.domain == "mydomain"]
+            custom_nodes = [n for n in onnx_model.graph.node if n.op_type == "FixedPointQuant" and n.domain == "Quantify"]
             self.assertEqual(len(custom_nodes), 1, f"Expected 1 custom node, found {len(custom_nodes)}")
             
             # Verify attributes are present

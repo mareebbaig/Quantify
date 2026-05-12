@@ -5,7 +5,7 @@ Covers:
     - Core SiLU + fixed-point quantization math
     - Calibration logic (LSB search, buffer updates)
     - Brevitas integration via QuantConv2d / QuantLinear
-    - ONNX export with custom `mydomain::QuantSiLU` node
+    - ONNX export with custom `Quantify::QuantSiLU` node
     - Gradient flow (STE)
     - Edge cases (all zeros, negative inputs, extreme values)
     - State-dict roundtrips
@@ -285,7 +285,7 @@ class TestONNXExport:
         try:
             import onnx
             onnx_model = onnx.load(onnx_path)
-            custom_nodes = [n for n in onnx_model.graph.node if n.op_type == "QuantSiLU" and n.domain == "mydomain"]
+            custom_nodes = [n for n in onnx_model.graph.node if n.op_type == "QuantSiLU" and n.domain == "Quantify"]
             assert len(custom_nodes) == 1, f"Expected 1 custom node, found {len(custom_nodes)}"
 
             node = custom_nodes[0]

@@ -555,7 +555,7 @@ Pass `dynamo=False` to use the legacy TorchScript-based exporter:
 torch.onnx.export(
     model, dummy, output_path,
     opset_version=13,
-    custom_opsets={'mydomain': 1},
+    custom_opsets={'Quantify': 1},
     dynamo=False,                  # required in PyTorch 2.x
 )
 ```
@@ -576,7 +576,7 @@ class MyQuantFn(Function):
     def symbolic(g, x, scale, zero_point, bit_width, *attrs):
         scale_v = symbolic_helper._maybe_get_const(scale, "t")
         quantized = g.op(
-            "mydomain::MyQuant",
+            "Quantify::MyQuant",
             x,
             scale_f=scale_v,            # see suffix coercion below
             bit_width_i=int(bit_width),
@@ -637,7 +637,7 @@ ONNX shape inference treats the output as opaque and downstream
 optimizations or validators may fail.
 
 ```python
-g.op("mydomain::MyQuant", x, ...).setType(x.type())
+g.op("Quantify::MyQuant", x, ...).setType(x.type())
 ```
 
 ### Producing the 4-tuple in the symbolic graph
@@ -664,7 +664,7 @@ error during the backward pass.
 
 ### Custom domains require runtime support
 
-A custom op like `mydomain::FixedPointQuant` is not part of standard
+A custom op like `Quantify::FixedPointQuant` is not part of standard
 ONNX. ONNX Runtime, TensorRT, and similar engines will reject it unless
 a custom kernel is registered for the target runtime. Three deployment
 strategies:
@@ -759,7 +759,7 @@ flow, and tracing issues.
 torch.onnx.export(
     layer, torch.randn(1, 64), "out.onnx",
     opset_version=13,
-    custom_opsets={'mydomain': 1},
+    custom_opsets={'Quantify': 1},
     dynamo=False,
 )
 ```

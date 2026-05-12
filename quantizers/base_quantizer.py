@@ -28,15 +28,14 @@ class BaseQuantizer(nn.Module, ABC):
     def __init__(
         self,
         bit_width: int = 8,
-        quantization_start_gap: int = 0,
         quantization_is_enabled_globally: bool = True,
         **kwargs
     ):
         super().__init__()
         self.bit_width = bit_width
-        self.quantization_start_gap = quantization_start_gap
         self.quantization_is_enabled_globally = quantization_is_enabled_globally
         self.inference_counter = 0
+        self.inference_sequence_id = -1
 
         self.annealing_alpha = 1.0
         self.annealing_alpha_step = 0.1
@@ -48,12 +47,16 @@ class BaseQuantizer(nn.Module, ABC):
         quantizer_manager.register_quantizer(self)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        if self.inference_sequence_id == -1:
+            self.inference_sequence_id = quantizer_manager.get_inference_sequence_id()
+
         # 1. Inference gating
         perform_quantization = True
         if not self.quantization_is_enabled_globally:
             perform_quantization = False
-        elif self.inference_counter < self.quantization_start_gap:
-            self.inference_counter += 1
+        elif self.inference_counter < self.inference_sequence_id * quantizer_manager.quantization_start_gap:
+            if self.training:
+                self.inference_counter += 1
             perform_quantization = False
             
         if not perform_quantization:
@@ -77,9 +80,10 @@ class BaseQuantizer(nn.Module, ABC):
         quantized = self._quantize(x, params)
         scale, zero_point, bit_width = self._get_metadata(params, x)
 
-        if self.annealing_alpha <= 1.0:
+        if self.annealing_alpha < 1.0:
             result = (1 - self.annealing_alpha) * x + self.annealing_alpha * quantized
             self.annealing_alpha = min(self.annealing_alpha + self.annealing_alpha_step, 1.0)
+            print("WOAH!", self.inference_sequence_id, self.annealing_alpha)
         else:
             result = quantized
 

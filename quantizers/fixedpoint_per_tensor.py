@@ -182,7 +182,7 @@ def _round(x: torch.Tensor, mode: RoundingMode) -> torch.Tensor:
 # ---------------------------------------------------------------------------
 
 class FixedPointQuantFn(Function):
-    """Symbolic shim: emits a single `mydomain::FixedPointQuant` ONNX node."""
+    """Symbolic shim: emits a single `Quantify::FixedPointQuant` ONNX node."""
 
     @staticmethod
     def symbolic(g, x, scale, zero_point, lsb, bit_width, signed, narrow_range, rounding_mode):
@@ -192,7 +192,7 @@ class FixedPointQuantFn(Function):
         zero_point_val = symbolic_helper._maybe_get_const(zero_point, "t")
         
         quantized = g.op(
-            "mydomain::FixedPointQuant",
+            "Quantify::FixedPointQuant",
             x,
             scale_f=scale_val,
             zero_point_f=zero_point_val,
@@ -261,15 +261,19 @@ class FixedPointPerTensorQuantizer(BaseQuantizer):
     def _calibrate(self, x: torch.Tensor) -> Any:
         """Run calibration/search logic and return a params dict."""
         # Use explicit signed setting from injector/constructor to align with Brevitas proxy
-        signed = self.signed
+        # signed = self.signed
+        if torch.all(x >= 0.0):
+            self.signed = False
+        else:
+            self.signed = True
         lsb, num_unique = find_optimal_lsb(
             x,
             self.bit_width,
-            signed,
+            self.signed,
             self.rounding_mode,
             self.narrow_range,
         )
-        return {'lsb': lsb, 'signed': signed, 'num_unique': num_unique}
+        return {'lsb': lsb, 'signed': self.signed, 'num_unique': num_unique}
 
     def _save_calibration(self, params: Any) -> None:
         """Save calibration results to buffers."""

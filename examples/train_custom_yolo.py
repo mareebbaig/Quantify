@@ -43,6 +43,8 @@ from quantizers import FixedPointPerTensorQuantizer
 
 from contextlib import contextmanager
 import copy
+from quantizers.manager import quantizer_manager
+import numpy as np
 
 # Example usage python -m examples.train_custom_yolo --data /home/th/tmp/quanttests/cached_datasets/coco_yolo_fmt/coco.yaml --device cuda --batch 128 --epochs 1
 
@@ -105,7 +107,7 @@ class CustomYOLOv8nTrainer(DetectionTrainer):
             export_model, dummy, str(self.last) + ".onnx",
             dynamo=False,
             opset_version=13,
-            custom_opsets={"mydomain": 1},
+            custom_opsets={"Quantify": 1},
             do_constant_folding=False,  # keep the custom node visible
             input_names=["input"],
             output_names=["output"],
@@ -116,7 +118,7 @@ class CustomYOLOv8nTrainer(DetectionTrainer):
                 export_model, dummy, str(self.best) + ".onnx",
                 dynamo=False,
                 opset_version=13,
-                custom_opsets={"mydomain": 1},
+                custom_opsets={"Quantify": 1},
                 do_constant_folding=False,  # keep the custom node visible
                 input_names=["input"],
                 output_names=["output"],
@@ -144,11 +146,19 @@ class CustomYOLOv8nTrainer(DetectionTrainer):
         # Load a previously saved state dict if provided via --checkpoint.
         # self.args.checkpoint is set from overrides in main().
         checkpoint = self._checkpoint
+        torch.serialization.add_safe_globals([
+            np.core.multiarray.scalar,
+            np.dtype,
+            np.dtypes.Float64DType,  # may also appear
+            np.int64,
+            np.float64,
+            np.ndarray,
+        ])
         if checkpoint:
             ckpt = torch.load(checkpoint, map_location="cpu", weights_only=True)
             # Support both raw state dicts and Ultralytics-style ckpt dicts
             if isinstance(ckpt, dict) and "model" in ckpt:
-                state_dict = ckpt["model"].state_dict()
+                state_dict = ckpt["model"]
             elif isinstance(ckpt, dict) and any(isinstance(v, torch.Tensor) for v in ckpt.values()):
                 state_dict = ckpt  # already a state dict
             else:
@@ -169,6 +179,10 @@ class CustomYOLOv8nTrainer(DetectionTrainer):
             n_params = sum(p.numel() for p in model.parameters())
             mode = "fine-tuning" if checkpoint else "scratch"
             print(f"Custom YOLOv8nPANOnly ({mode}): nc={nc}, strides={model.stride.tolist()}, {n_params:,} parameters")
+
+        quantizer_manager.quantization_start_gap = 100
+        quantizer_manager.set_anneling_for_n_inferences(20)
+        quantizer_manager.stop_quantization_for_n_inferences(917*25)
 
         return model
 
