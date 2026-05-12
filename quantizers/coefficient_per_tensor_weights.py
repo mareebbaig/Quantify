@@ -123,7 +123,7 @@ class CoefficientPerTensorWeightQuantizer(BaseQuantizer):
         self.best_bit_shift_scale.fill_(params['bit_shift_scale'])
         self.search_done.fill_(True)
 
-    def _load_calibration(self, params: Any) -> Any:
+    def _load_calibration(self) -> Any:
         """Load calibration results from buffers."""
         return {
             'set_idx': self.best_set_idx.item(),
