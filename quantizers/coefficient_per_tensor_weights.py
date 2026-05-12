@@ -29,28 +29,28 @@ class CoefficientQuantFn(Function):
     """Symbolic shim: emits a single `Quantify::CoefficientQuant` ONNX node."""
 
     @staticmethod
-    def symbolic(g, x, coefficients, n, bit_width, signed):
+    def symbolic(g, x, coefficients, bit_shift_scale, bit_width, signed):
         coeffs_val = symbolic_helper._maybe_get_const(coefficients, "t")
         
         quantized = g.op(
             "Quantify::CoefficientQuant",
             x,
             coefficients_t=coeffs_val,
-            n_i=int(n),
+            n_i=int(bit_shift_scale),
             bit_width_i=int(bit_width),
             signed_i=int(signed),
         ).setType(x.type())
         
         # Brevitas expects a 4-tuple output; create auxiliary constants
-        scale = g.op("Constant", value_t=torch.tensor(2.0 ** n))
+        scale = g.op("Constant", value_t=torch.tensor(2.0 ** bit_shift_scale))
         zero_point = g.op("Constant", value_t=torch.tensor(0.0))
         bw = g.op("Constant", value_t=torch.tensor(float(bit_width)))
         return quantized, scale, zero_point, bw
 
     @staticmethod
-    def forward(ctx, x, coefficients, n, bit_width, signed):
+    def forward(ctx, x, coefficients, bit_shift_scale, bit_width, signed):
         ctx.save_for_backward(x)
-        s = 2.0 ** n
+        s = 2.0 ** bit_shift_scale
         scaled_coeffs = coefficients * s
         diffs = torch.abs(x.unsqueeze(-1) - scaled_coeffs)
         min_indices = torch.argmin(diffs, dim=-1)
@@ -88,19 +88,19 @@ class CoefficientPerTensorWeightQuantizer(BaseQuantizer):
 
         # Register search results as buffers (handled by base class for state-dict)
         self.register_buffer('best_set_idx', torch.tensor(0, dtype=torch.long))
-        self.register_buffer('best_n', torch.tensor(0, dtype=torch.long))
+        self.register_buffer('best_bit_shift_scale', torch.tensor(0, dtype=torch.long))
 
     def _calibrate(self, x: torch.Tensor) -> Any:
         """Run calibration/search logic and return a params dict."""
         device = x.device
         best_sad = float("inf")
         best_set_idx = 0
-        best_n = 0
+        best_bit_shift_scale = 0
 
         for idx, coeffs in enumerate(self.coefficient_sets):
             coeffs_dev = coeffs.to(device)
-            for n in range(-12, 13):
-                s = 2.0 ** n
+            for bit_shift_scale in range(-12, 13):
+                s = 2.0 ** bit_shift_scale
                 scaled_coeffs = coeffs_dev * s
                 diffs = torch.abs(x.unsqueeze(-1) - scaled_coeffs)
                 min_indices = torch.argmin(diffs, dim=-1)
@@ -110,21 +110,21 @@ class CoefficientPerTensorWeightQuantizer(BaseQuantizer):
                 if sad < best_sad:
                     best_sad = sad
                     best_set_idx = idx
-                    best_n = n
+                    best_bit_shift_scale = bit_shift_scale
 
-        return {'set_idx': best_set_idx, 'n': best_n}
+        return {'set_idx': best_set_idx, 'bit_shift_scale': best_bit_shift_scale}
 
     def _save_calibration(self, params: Any) -> None:
         """Save calibration results to buffers."""
         self.best_set_idx.fill_(params['set_idx'])
-        self.best_n.fill_(params['n'])
+        self.best_bit_shift_scale.fill_(params['bit_shift_scale'])
         self.search_done.fill_(True)
 
     def _load_calibration(self) -> Any:
         """Load calibration results from buffers."""
         return {
             'set_idx': self.best_set_idx.item(),
-            'n': self.best_n.item()
+            'bit_shift_scale': self.best_bit_shift_scale.item()
         }
 
     def _quantize(self, x: torch.Tensor, params: Any) -> torch.Tensor:
@@ -134,14 +134,14 @@ class CoefficientPerTensorWeightQuantizer(BaseQuantizer):
             quantized, _, _, _ = CoefficientQuantFn.apply(
                 x,
                 chosen_coeffs,
-                params['n'],
+                params['bit_shift_scale'],
                 len(self.coefficient_sets[params['set_idx']]),
                 1  # signed
             )
             return quantized
             
         chosen_coeffs = self.coefficient_sets[params['set_idx']].to(x.device)
-        s = 2.0 ** params['n']
+        s = 2.0 ** params['bit_shift_scale']
         scaled_coeffs = chosen_coeffs * s
         
         diffs = torch.abs(x.unsqueeze(-1) - scaled_coeffs)
@@ -151,7 +151,7 @@ class CoefficientPerTensorWeightQuantizer(BaseQuantizer):
 
     def _get_metadata(self, params: Any, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Return scale, zero_point, and bit_width tensors matching x's dtype/device."""
-        scale = torch.tensor(2.0 ** params['n'], dtype=x.dtype, device=x.device)
+        scale = torch.tensor(2.0 ** params['bit_shift_scale'], dtype=x.dtype, device=x.device)
         zero_point = torch.tensor(0.0, dtype=x.dtype, device=x.device)
         # Bit width corresponds to the number of coefficients in the chosen set
         bit_width = torch.tensor(float(len(self.coefficient_sets[params['set_idx']])), dtype=x.dtype, device=x.device)
