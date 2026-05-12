@@ -175,14 +175,11 @@ class QATWarmupScheduler:
 
 # ---------------------------------------------------------------------------
 # Brevitas model state helpers
-# ---------------------------------------------------------------------------
+# ------------------------------------------------------------------
 
 def enable_quant(model: nn.Module) -> None:
     """
     Enable fake-quantization on all Brevitas quantized modules.
-
-    Works by calling disable_quant=False on QuantHardTanh / ActQuantProxyProtocol
-    etc., or more generally by looking for the standard Brevitas API.
     """
     _set_quant_enabled(model, enabled=True)
 
@@ -196,20 +193,10 @@ def _set_quant_enabled(model: nn.Module, enabled: bool) -> None:
     """
     Toggle quantization on Brevitas modules.
 
-    Brevitas exposes `disable_quant` attributes on proxy objects.
+    Brevitas exposes `disable_quant` attributes on quant proxies
+    (e.g., `QuantLinear.weight_quant`, `QuantIdentity.input_quant`).
     We walk the model and flip them.
     """
-    try:
-        # Try the Brevitas high-level API first (available in recent versions)
-        from brevitas.nn.quant_layer import QuantWeightBiasInputOutputLayer
-        for module in model.modules():
-            if isinstance(module, QuantWeightBiasInputOutputLayer):
-                if hasattr(module, "disable_quant"):
-                    module.disable_quant = not enabled
-    except ImportError:
-        pass
-
-    # Fallback: walk all modules and set disable_quant where present
     for module in model.modules():
         if hasattr(module, "disable_quant"):
             module.disable_quant = not enabled

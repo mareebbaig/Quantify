@@ -18,7 +18,6 @@ enable_quant(model) / disable_quant(model)
 
 from __future__ import annotations
 
-import contextlib
 from typing import Callable, Optional
 
 import torch
@@ -62,7 +61,9 @@ def run_calibration(
     original_training = model.training
     model.eval()
 
-    with _calibration_context(model):
+    # Use Brevitas' official calibration context manager
+    from brevitas.graph.calibrate import calibration_mode
+    with calibration_mode(model):
         with torch.no_grad():
             for i, batch in enumerate(data_loader):
                 if i >= n_batches:
@@ -92,55 +93,6 @@ def run_calibration(
 
 
 # ---------------------------------------------------------------------------
-# Calibration context manager
-# ---------------------------------------------------------------------------
-
-@contextlib.contextmanager
-def _calibration_context(model: nn.Module):
-    """
-    Enable Brevitas calibration mode for the duration of the block.
-
-    In calibration mode, Brevitas QuantLayers observe activations to
-    compute scale factors without injecting quantization noise.
-    """
-    _set_calibration(model, enabled=True)
-    try:
-        yield
-    finally:
-        _set_calibration(model, enabled=False)
-
-
-def _set_calibration(model: nn.Module, enabled: bool) -> None:
-    """
-    Toggle Brevitas calibration mode.
-
-    Brevitas ≥ 0.8 exposes `_calibration_enabled` on quant proxies.
-    Older versions may use different APIs — we try a few approaches.
-    """
-    # Approach 1: Brevitas ≥ 0.8 context manager API
-    try:
-        from brevitas.core.quant import QuantType
-        from brevitas.inject.enum import QuantType as QT
-    except ImportError:
-        pass
-
-    try:
-        import brevitas.nn as qnn
-        for module in model.modules():
-            # Try the standard Brevitas enable_act_quantization API
-            if hasattr(module, "_calibration_enabled"):
-                module._calibration_enabled = enabled
-    except Exception:
-        pass
-
-    # Approach 2: Walk all modules looking for calibration handles
-    for module in model.modules():
-        for attr in ("_calibration_enabled", "calibration_enabled"):
-            if hasattr(module, attr):
-                setattr(module, attr, enabled)
-
-
-# ---------------------------------------------------------------------------
 # enable / disable quant (re-exported for convenience)
 # ---------------------------------------------------------------------------
 
@@ -158,7 +110,7 @@ def disable_quant(model: nn.Module) -> None:
 
 # ---------------------------------------------------------------------------
 # Quantization range analysis
-# ---------------------------------------------------------------------------
+# ------------------------------------------------------------------
 
 def inspect_quant_ranges(model: nn.Module) -> dict:
     """
