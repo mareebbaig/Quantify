@@ -40,14 +40,60 @@ from quantizers.base_quantizer import BaseQuantizer
 # Core fixed-point quantization
 # ---------------------------------------------------------------------------
 
-def quantize_fixed_point(
+def quantize_fixed_point_with_integers(
     inputs: torch.Tensor,
     lsb: int,
     bit_width: int,
     signed: bool,
     rounding_mode: "RoundingMode",
     narrow_range: bool = False,
-) -> torch.Tensor:
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Quantize a input tensor to a fixed-point grid.
+
+    Parameters
+    ----------
+    inputs : torch.Tensor
+        The floating-point input tensor.
+    lsb : int
+        Position of the least-significant bit (can be negative for fractional steps).
+    bit_width : int
+        Total number of bits (including sign bit for signed mode).
+    signed : bool
+        Whether to use signed two's-complement representation.
+    rounding_mode : RoundingMode
+        ROUND_TO_NEAREST_EVEN or FLOOR.
+    narrow_range : bool
+        If True and signed, exclude the most negative value (e.g. -4.0 for 4-bit)
+        to make the range symmetric.  Default False.
+
+    Returns
+    -------
+    torch.Tensor
+        Quantized (dequantized) input tensor on the fixed-point grid.
+    torch.Tensor
+        Quantized (dequantized) input tensor on the fixed-point grid as integers.
+    """
+    step = 2.0 ** lsb
+
+    if signed:
+        integer_min = -(2 ** (bit_width - 1))
+        if narrow_range:
+            integer_min += 1  # exclude most-negative integer
+        integer_max = 2 ** (bit_width - 1) - 1
+    else:
+        integer_min = 0
+        integer_max = 2 ** bit_width - 1
+
+    # Quantize: map to integer, round, clamp, scale back
+    integers = inputs / step
+    integers = _round(integers, rounding_mode)
+    integers = torch.clamp(integers, integer_min, integer_max)
+    quantized = integers * step
+
+    return quantized, integers
+
+def quantize_fixed_point(inputs: torch.Tensor, lsb: int, bit_width: int, signed: bool, rounding_mode: "RoundingMode", narrow_range: bool = False) -> torch.Tensor:
     """
     Quantize a input tensor to a fixed-point grid.
 
@@ -72,22 +118,7 @@ def quantize_fixed_point(
     torch.Tensor
         Quantized (dequantized) input tensor on the fixed-point grid.
     """
-    step = 2.0 ** lsb
-
-    if signed:
-        code_min = -(2 ** (bit_width - 1))
-        if narrow_range:
-            code_min += 1  # exclude most-negative code
-        code_max = 2 ** (bit_width - 1) - 1
-    else:
-        code_min = 0
-        code_max = 2 ** bit_width - 1
-
-    # Quantize: map to integer codes, round, clamp, scale back
-    codes = inputs / step
-    codes = _round(codes, rounding_mode)
-    codes = torch.clamp(codes, code_min, code_max)
-    quantized = codes * step
+    quantized, _ = quantize_fixed_point_with_integers(inputs, lsb, bit_width, signed, rounding_mode, narrow_range)
 
     return quantized
 
