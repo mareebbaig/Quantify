@@ -1,6 +1,7 @@
 from quantizers.coefficient_per_tensor_weights import CoefficientPerTensorWeightQuant
 from quantizers.fixedpoint_per_tensor import FixedPointPerTensorWeightQuant
 from quantizers.fixedpoint_per_tensor import FixedPointPerTensorActivationQuant
+from quantizers.fixedpoint_per_tensor import FixedPointPerTensorBiasQuant
 
 from quantizers.coefficient_per_tensor_weights import CoefficientPerTensorWeightQuantizer
 from quantizers.fixedpoint_per_tensor import FixedPointPerTensorQuantizer
@@ -12,6 +13,7 @@ __all__ = [
     "CoefficientPerTensorWeightQuant",
     "FixedPointPerTensorWeightQuant",
     "FixedPointPerTensorActivationQuant",
+    "FixedPointPerTensorBiasQuant",
     "CoefficientPerTensorWeightQuantizer",
     "FixedPointPerTensorQuantizer",
     "RoundingMode",
