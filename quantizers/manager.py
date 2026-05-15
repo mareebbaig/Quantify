@@ -19,7 +19,6 @@ class QuantizerManager:
         
         # Global flag to force all quantizers to re-run their search/calibration
         self.force_recalibration = False
-        self.quantization_is_enabled_globally = True
         self.quantization_start_gap = 0
         # Registry to keep track of all active quantizer instances {id: quantizer}
         self.quantizers = {}
@@ -32,7 +31,6 @@ class QuantizerManager:
         Reset the manager's internal state. Useful for testing or restarting experiments.
         """
         self.force_recalibration = False
-        self.quantization_is_enabled_globally = True
         self.quantization_start_gap = 0
         self.quantizers.clear()
         self._id_counter = 0
@@ -47,6 +45,11 @@ class QuantizerManager:
         for quant in self.quantizers.values():
             quant.annealing_alpha.data.fill_(0)
             quant.annealing_alpha_step.data.fill_(alpha_step)
+
+    def disable_quantization(self):
+        """Disable quantization by setting annealing_alpha to zero for all registered quantizers."""
+        for quant in self.quantizers.values():
+            quant.annealing_alpha.data.fill_(0.0)
 
     def register_quantizer(self, quantizer):
         """

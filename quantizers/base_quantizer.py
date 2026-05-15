@@ -28,13 +28,11 @@ class BaseQuantizer(nn.Module, ABC):
     def __init__(
         self,
         bit_width: int = 8,
-        quantization_is_enabled_globally: bool = True,
         quantizer_manager: Optional[QuantizerManager] = None,
         **kwargs
     ):
         super().__init__()
         self.bit_width = bit_width
-        self.quantization_is_enabled_globally = quantization_is_enabled_globally
         self.inference_counter = 0
         self.inference_sequence_id = -1
         self.annealing_alpha_step = 0.1
@@ -57,9 +55,7 @@ class BaseQuantizer(nn.Module, ABC):
 
         # 1. Inference gating
         perform_quantization = True
-        if not self.quantization_is_enabled_globally:
-            perform_quantization = False
-        elif self.inference_counter < self.inference_sequence_id * self.quantizer_manager.quantization_start_gap:
+        if self.inference_counter < self.inference_sequence_id * self.quantizer_manager.quantization_start_gap:
             if self.training:
                 self.inference_counter += 1
             perform_quantization = False
