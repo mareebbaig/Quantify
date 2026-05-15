@@ -8,8 +8,7 @@ import brevitas.nn as qnn
 # Import the custom fixed-point quantizers
 from quantizers.fixedpoint_per_tensor import FixedPointPerTensorWeightQuant, FixedPointPerTensorActivationQuant, FixedPointPerTensorBiasQuant
 from quantizers.coefficient_per_tensor_weights import CoefficientPerTensorWeightQuant
-from quantizers.manager import quantizer_manager
-from utils import export_onnx_with_io
+from utils.onnx_export import export_onnx_with_io
 
 class SimpleMNISTNet(nn.Module):
     """
@@ -38,7 +37,7 @@ class SimpleMNISTNet(nn.Module):
         self.conv2 = qnn.QuantConv2d(
             16, 8, kernel_size=3, stride=2,
             bias_quant=FixedPointPerTensorBiasQuant,
-            weight_quant=FixedPointPerTensorWeightQuant, bias=True,
+            weight_quant=FixedPointPerTensorWeightQuant,
             output_quant=FixedPointPerTensorActivationQuant
         )
         self.relu2 = nn.ReLU()
@@ -46,24 +45,23 @@ class SimpleMNISTNet(nn.Module):
         self.conv3 = qnn.QuantConv2d(
             4, 6, kernel_size=3, stride=2,
             bias_quant=FixedPointPerTensorBiasQuant,
-            weight_quant=FixedPointPerTensorWeightQuant, bias=True,
+            weight_quant=FixedPointPerTensorWeightQuant,
             output_quant=FixedPointPerTensorActivationQuant
         )
 
         self.conv4 = qnn.QuantConv2d(
             4, 6, kernel_size=3, stride=2,
             bias_quant=FixedPointPerTensorBiasQuant,
-            weight_quant=FixedPointPerTensorWeightQuant, bias=True,
+            weight_quant=FixedPointPerTensorWeightQuant,
             output_quant=FixedPointPerTensorActivationQuant
         )
 
         self.flatten = nn.Flatten()
         
         # Final Linear Layer
-        # Input size: 32 channels * 5x5 spatial (after two 3x3 convs and two 2x2 pools)
+        # Input size: 12 channels * 2x2 spatial (after convs with stride=2)
         self.fc = qnn.QuantLinear(
-            12 * 2 * 2, 10, #bias=True,
-            #bias_quant=FixedPointPerTensorBiasQuant,
+            12 * 2 * 2, 10,
             weight_quant=FixedPointPerTensorWeightQuant,
             output_quant=FixedPointPerTensorActivationQuant
         )
@@ -117,8 +115,8 @@ def train():
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
-    quantizer_manager.quantization_start_gap = 20
-    quantizer_manager.set_anneling_for_n_inferences(6)
+    # quantizer_manager.quantization_start_gap = 20
+    # quantizer_manager.set_annealing_for_n_inferences(6)
 
     print(f"Training on {device}...")
 
