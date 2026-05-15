@@ -44,7 +44,7 @@ class QuantizerManager:
         alpha_step = 1.0/n
         for quant in self.quantizers.values():
             quant.annealing_alpha.data.fill_(0)
-            quant.annealing_alpha_step.data.fill_(alpha_step)
+            quant.annealing_alpha_step = alpha_step
 
     def disable_quantization(self):
         """Disable quantization by setting annealing_alpha to zero for all registered quantizers."""
