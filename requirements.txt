@@ -5,8 +5,6 @@ pytest-cases
 ruamel.yaml
 numpy==1.26.4
 onnx==1.17.0
-onnx==1.17.0
-onnx==1.17.0
 inflect
 Pillow
 datasets==4.8.4
