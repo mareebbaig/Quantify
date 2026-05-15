@@ -14,14 +14,14 @@ class TestFixedPointManager(unittest.TestCase):
 
     def test_quantizer_registration(self):
         """Verify that quantizer instances are automatically registered with the manager and given IDs."""
-        q1 = FixedPointPerTensorQuantizer(bit_width=8)
-        q2 = FixedPointPerTensorQuantizer(bit_width=4)
+        # Inject a shared manager to properly test cross-instance ID uniqueness
+        shared_manager = QuantizerManager()
+        q1 = FixedPointPerTensorQuantizer(bit_width=8, quantizer_manager=shared_manager)
+        q2 = FixedPointPerTensorQuantizer(bit_width=4, quantizer_manager=shared_manager)
         
-        # Each quantizer creates its own manager by default
-        self.assertIn(q1, q1.quantizer_manager.quantizers.values())
-        self.assertIn(q2, q2.quantizer_manager.quantizers.values())
-        self.assertEqual(len(q1.quantizer_manager.quantizers), 1)
-        self.assertEqual(len(q2.quantizer_manager.quantizers), 1)
+        self.assertIn(q1, shared_manager.quantizers.values())
+        self.assertIn(q2, shared_manager.quantizers.values())
+        self.assertEqual(len(shared_manager.quantizers), 2)
         
         # Verify unique IDs were assigned
         self.assertTrue(hasattr(q1, 'quant_id'))
