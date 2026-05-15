@@ -31,19 +31,19 @@ def reset_quantizer_states() -> None:
     try:
         from quantizers.fixedpoint_per_tensor import FixedPointQuantFn
         FixedPointQuantFn.reset_capture_state()
-    except ImportError:
+    except (ImportError, AttributeError):
         pass
 
     try:
         from quantizers.silu_quant import SiLUQuantFn
         SiLUQuantFn.reset_capture_state()
-    except ImportError:
+    except (ImportError, AttributeError):
         pass
 
     try:
         from quantizers.coefficient_per_tensor_weights import CoefficientQuantFn
         CoefficientQuantFn.reset_capture_state()
-    except ImportError:
+    except (ImportError, AttributeError):
         pass
 
 
@@ -90,7 +90,7 @@ def export_onnx_with_io(
         Extra keyword arguments forwarded verbatim to ``torch.onnx.export``.
 
     Returns
-    -------
+    -----
     onnx.ModelProto
         The loaded-and-augmented ONNX model (also saved to filepath).
     """
@@ -201,7 +201,7 @@ def load_embedded_io(
         Path to the .onnx file or an already-loaded ModelProto.
 
     Returns
-    -------
+    -----
     tuple[np.ndarray, np.ndarray]
         (dummy_input, dummy_output)
     """
