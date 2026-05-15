@@ -22,7 +22,8 @@ from .logger import ExperimentLogger
 from .metrics import MetricsTracker
 from .plotting import TrainingPlotter
 from .schedulers import QATWarmupScheduler, collect_scale_factors
-from .engine_utils import EarlyStopping, EpochTimer, log_hardware_info, set_seed
+from .engine_utils import EarlyStopping, EpochTimer, log_hardware_info, set_seed, LossPlateauDetector
+from quantizers.manager import QuantizerManager
 
 
 class Trainer:
@@ -156,6 +157,9 @@ class Trainer:
                 mode       = config.checkpoint.monitor_mode,
             )
 
+        # Loss plateau detector for QAT activation
+        self.loss_plateau_detector = LossPlateauDetector(patience=5)
+
         # AMP scaler (disabled on CPU / MPS)
         self._use_amp = config.mixed_precision and str(self.device).startswith("cuda")
         self._scaler  = torch.cuda.amp.GradScaler(enabled=self._use_amp)
@@ -279,9 +283,18 @@ class Trainer:
                 config_dict  = self.config.to_dict(),
             )
 
-            # Early stopping
+            # Plateau detection & QAT activation
+            if QuantizerManager().is_not_quantizing_at_all:
+                is_plateau = self.loss_plateau_detector.step(monitor_val)
+                if is_plateau:
+                    print(f"[trainer] Training loss plateaued. Activating QAT...")
+                    mgr = QuantizerManager()
+                    mgr.set_annealing_for_n_inferences(6)
+                    mgr.quantization_start_gap = 20
+
+            # Early stopping: only trigger when QAT has actually started
             stop = False
-            if self.early_stopper is not None:
+            if self.early_stopper is not None and not QuantizerManager().is_not_quantizing_at_all:
                 stop = self.early_stopper.step(monitor_val, model=self.model, epoch=epoch)
 
             # Progress line
