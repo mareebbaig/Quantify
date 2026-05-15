@@ -10,7 +10,7 @@ from .plotting import TrainingPlotter
 from .schedulers import QATWarmupScheduler, WarmupCosineScheduler
 from .calibration import run_calibration, enable_quant, disable_quant
 from .logger import ExperimentLogger
-from .utils import set_seed, get_hardware_info, EarlyStopping
+from .engine_utils import set_seed, get_hardware_info, EarlyStopping
 
 __all__ = [
     "Trainer",
