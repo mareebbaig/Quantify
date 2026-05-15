@@ -193,6 +193,43 @@ class EarlyStopping:
 
 
 # ---------------------------------------------------------------------------
+# Loss Plateau Detection
+# ---------------------------------------------------------------------------
+
+class LossPlateauDetector:
+    """
+    Detects when a metric (e.g., training loss) stops improving for `patience` steps.
+    Useful for triggering phase transitions like switching from float training to QAT.
+    """
+
+    def __init__(self, patience: int = 5, min_delta: float = 1e-4):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = 0
+        self.best_value: Optional[float] = None
+        self.plateau_triggered = False
+
+    def step(self, current_value: float) -> bool:
+        """
+        Feed the current metric value. Returns True if plateau is detected.
+        """
+        if self.plateau_triggered:
+            return False
+
+        if self.best_value is None:
+            self.best_value = current_value
+        elif current_value > self.best_value - self.min_delta:
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.plateau_triggered = True
+                return True
+        else:
+            self.best_value = current_value
+            self.counter = 0
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Progress / ETA
 # ---------------------------------------------------------------------------
 

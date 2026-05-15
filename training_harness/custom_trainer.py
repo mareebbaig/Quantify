@@ -12,6 +12,7 @@ from ultralytics.utils import RANK
 from models.yolov8PanOnly import YOLOv8nPANOnly
 import quantizers as q
 from quantizers.manager import QuantizerManager
+from training_harness.engine_utils import LossPlateauDetector
 
 
 class CustomYOLOv8nTrainer(DetectionTrainer):
@@ -36,13 +37,55 @@ class CustomYOLOv8nTrainer(DetectionTrainer):
     Detect head's stride, nc, and reg_max. We attach a .model attribute
     that exposes this so the loss can find it.
     """
-    def __init__(self, *args, checkpoint: str = None, **kwargs):
+    def __init__(self, *args, checkpoint: str = None, qat_patience: int = 5, **kwargs):
         # Store checkpoint path before super().__init__ validates overrides
         self._checkpoint = checkpoint
+        self.qat_patience = qat_patience
         super().__init__(*args, **kwargs)
         # Disable EMA to prevent it from averaging/corrupting quantizer scales.
         # `ema` is not a valid override argument, so we nullify it after init.
         self.ema = None
+        
+        # Initialize plateau detector and QAT state
+        self.loss_plateau_detector = LossPlateauDetector(patience=qat_patience)
+        self.qat_activated = False
+        
+        # Deactivate quantizers initially for normal float training
+        QuantizerManager().disable_quantization()
+        
+        # Register callback to check plateau at end of each epoch
+        self.add_callback("on_train_epoch_end", self._check_qat_plateau)
+
+    def _check_qat_plateau(self, trainer):
+        """Callback triggered at the end of each training epoch."""
+        if self.qat_activated:
+            return
+
+        # Safety check: ensure we are still in the "not quantizing at all" phase
+        if not QuantizerManager().is_not_quantizing_at_all:
+            return
+
+        # Extract current training loss from Ultralytics trainer state
+        loss_val = 0.0
+        if hasattr(trainer, 'tloss') and trainer.tloss:
+            # Ultralytics stores running averages per loss component in tloss
+            loss_val = sum(m.avg for m in trainer.tloss if hasattr(m, 'avg')) / len(trainer.tloss)
+        elif hasattr(trainer, 'loss_items') and trainer.loss_items is not None:
+            if isinstance(trainer.loss_items, dict):
+                loss_val = sum(v.item() for v in trainer.loss_items.values()) / len(trainer.loss_items)
+            elif hasattr(trainer.loss_items, 'mean'):
+                loss_val = trainer.loss_items.mean().item()
+
+        # Check for plateau
+        is_plateau = self.loss_plateau_detector.step(loss_val)
+        if is_plateau:
+            print(f"[QAT Harness] Training loss plateaued after {self.qat_patience} epochs. Activating QAT...")
+            self.qat_activated = True
+            
+            mgr = QuantizerManager()
+            mgr.set_annealing_for_n_inferences(6)
+            mgr.quantization_start_gap = 20
+            print(f"[QAT Harness] QAT activated. Annealing alpha step set, start_gap=20.")
 
     def save_model(self):
         ckpt = {
@@ -94,9 +137,8 @@ class CustomYOLOv8nTrainer(DetectionTrainer):
         # This manager coordinates inference gating, annealing, and recalibration
         # specifically for this training run.
         quantizer_mgr = QuantizerManager()
-        quantizer_mgr.quantization_start_gap = 100
-        quantizer_mgr.set_annealing_for_n_inferences(20)
-        quantizer_mgr.stop_quantization_for_n_inferences(917*25)
+        # Note: Initial deactivation is handled in __init__ via QuantizerManager().disable_quantization()
+        # The plateau callback will override these settings when QAT is triggered.
         
         # Note: Brevitas DI instantiates quantizer classes internally.
         # If your quantizer classes inherit from BaseQuantizer, you can pass the manager
