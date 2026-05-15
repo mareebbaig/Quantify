@@ -1,8 +1,11 @@
 class QuantizerManager:
     """
-    Manager object shared across all quantizers.
+    Manager object for coordinating quantizer instances within a single model/run.
     Used for global coordination, such as forcing re-calibration 
     or tracking global quantization statistics.
+    
+    Note: This class is no longer a global singleton. Instantiate it explicitly
+    per training run or model to avoid state leakage across experiments or DDP ranks.
     """
     def __init__(self):
         # Global flag to force all quantizers to re-run their search/calibration
@@ -19,7 +22,7 @@ class QuantizerManager:
         for quant in self.quantizers.values():
             quant.inference_counter = -n
 
-    def set_anneling_for_n_inferences(self, n):
+    def set_annealing_for_n_inferences(self, n):
         alpha_step = 1.0/n
         for quant in self.quantizers.values():
             quant.annealing_alpha = 0
@@ -52,6 +55,3 @@ class QuantizerManager:
     def reset_global_flag(self):
         """Resets the global recalibration flag."""
         self.force_recalibration = False
-
-# The single shared reference for the entire framework
-quantizer_manager = QuantizerManager()

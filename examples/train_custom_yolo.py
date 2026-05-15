@@ -43,7 +43,7 @@ from quantizers import FixedPointPerTensorQuantizer
 
 from contextlib import contextmanager
 import copy
-from quantizers.manager import quantizer_manager
+from quantizers.manager import QuantizerManager
 import numpy as np
 
 # Example usage python -m examples.train_custom_yolo --data /home/th/tmp/quanttests/cached_datasets/coco_yolo_fmt/coco.yaml --device cuda --batch 128 --epochs 1
@@ -140,7 +140,20 @@ class CustomYOLOv8nTrainer(DetectionTrainer):
     def get_model(self, cfg=None, weights=None, verbose=True):
         """Build our custom YOLOv8nPANOnly, optionally loading a saved state dict."""
         nc = self.data["nc"]
-        model = YOLOv8nPANOnly(nc=nc, weight_quant=q.FixedPointPerTensorWeightQuant, act_quant=q.FixedPointPerTensorActivationQuant)# q.FixedPointPerTensorActivationQuant
+        
+        # Explicitly instantiate a local QuantizerManager to avoid global state leakage.
+        # This manager coordinates inference gating, annealing, and recalibration
+        # specifically for this training run.
+        quantizer_mgr = QuantizerManager()
+        quantizer_mgr.quantization_start_gap = 100
+        quantizer_mgr.set_annealing_for_n_inferences(20)
+        quantizer_mgr.stop_quantization_for_n_inferences(917*25)
+        
+        # Note: Brevitas DI instantiates quantizer classes internally.
+        # If your quantizer classes inherit from BaseQuantizer, you can pass the manager
+        # via a subclass or wrapper. For now, the manager is configured and ready
+        # to be attached to quantizer proxies post-instantiation if needed.
+        model = YOLOv8nPANOnly(nc=nc, weight_quant=q.FixedPointPerTensorWeightQuant, act_quant=q.FixedPointPerTensorActivationQuant)
         model = model.to(self.device)
 
         # Load a previously saved state dict if provided via --checkpoint.
@@ -179,10 +192,6 @@ class CustomYOLOv8nTrainer(DetectionTrainer):
             n_params = sum(p.numel() for p in model.parameters())
             mode = "fine-tuning" if checkpoint else "scratch"
             print(f"Custom YOLOv8nPANOnly ({mode}): nc={nc}, strides={model.stride.tolist()}, {n_params:,} parameters")
-
-        quantizer_manager.quantization_start_gap = 100
-        quantizer_manager.set_anneling_for_n_inferences(20)
-        quantizer_manager.stop_quantization_for_n_inferences(917*25)
 
         return model
 

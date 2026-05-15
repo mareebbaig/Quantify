@@ -11,9 +11,9 @@ Provides shared boilerplate for per-tensor quantizers, including:
 import torch
 import torch.nn as nn
 from abc import ABC, abstractmethod
-from typing import Tuple, Any
+from typing import Tuple, Any, Optional
 
-from quantizers.manager import quantizer_manager
+from quantizers.manager import QuantizerManager
 
 
 class BaseQuantizer(nn.Module, ABC):
@@ -29,6 +29,7 @@ class BaseQuantizer(nn.Module, ABC):
         self,
         bit_width: int = 8,
         quantization_is_enabled_globally: bool = True,
+        quantizer_manager: Optional[QuantizerManager] = None,
         **kwargs
     ):
         super().__init__()
@@ -43,18 +44,21 @@ class BaseQuantizer(nn.Module, ABC):
         # Calibration state buffers
         self.register_buffer('search_done', torch.tensor(False, dtype=torch.bool))
         
-        # Register with global manager for coordination
-        quantizer_manager.register_quantizer(self)
+        # Use provided manager or create a local instance to avoid global state
+        self.quantizer_manager = quantizer_manager if quantizer_manager is not None else QuantizerManager()
+        
+        # Register with manager for coordination
+        self.quantizer_manager.register_quantizer(self)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         if self.inference_sequence_id == -1:
-            self.inference_sequence_id = quantizer_manager.get_inference_sequence_id()
+            self.inference_sequence_id = self.quantizer_manager.get_inference_sequence_id()
 
         # 1. Inference gating
         perform_quantization = True
         if not self.quantization_is_enabled_globally:
             perform_quantization = False
-        elif self.inference_counter < self.inference_sequence_id * quantizer_manager.quantization_start_gap:
+        elif self.inference_counter < self.inference_sequence_id * self.quantizer_manager.quantization_start_gap:
             if self.training:
                 self.inference_counter += 1
             perform_quantization = False
@@ -66,13 +70,13 @@ class BaseQuantizer(nn.Module, ABC):
 
         # 2. Calibration check
         is_exporting = torch.onnx.is_in_onnx_export()
-        should_calibrate = not self.search_done.item() or quantizer_manager.force_recalibration
+        should_calibrate = not self.search_done.item() or self.quantizer_manager.force_recalibration
         
         if not is_exporting and should_calibrate:
             params = self._calibrate(x)
             self._save_calibration(params)
             # Reset global flag after triggering recalibration to avoid forcing it on every forward
-            quantizer_manager.reset_global_flag()
+            self.quantizer_manager.reset_global_flag()
         else:
             params = self._load_calibration()
             
