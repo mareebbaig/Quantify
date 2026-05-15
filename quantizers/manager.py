@@ -36,6 +36,20 @@ class QuantizerManager:
         self._id_counter = 0
         self._inference_sequence_id_counter = 0
 
+    @property
+    def is_quantizing_everything_fully(self):
+        for quant in self.quantizers.values():
+            if quant.annealing_alpha != 1.0:
+                return False
+        return True
+
+    @property
+    def is_not_quantizing_at_all(self):
+        for quant in self.quantizers.values():
+            if quant.annealing_alpha != 0.0:
+                return False
+        return True
+
     def stop_quantization_for_n_inferences(self, n):
         for quant in self.quantizers.values():
             quant.inference_counter = -n
