@@ -98,6 +98,26 @@ def train():
     LOG_DIR = "logs/simple_mnist_qat"
     EXPERIMENT_NAME = "simple_mnist_qat"
 
+    print("ASDASDASDASDASD")
+    print("ASDASDASDASDASD")
+    print("ASDASDASDASDASD")
+    print("ASDASDASDASDASD")
+    print("ASDASDASDASDASD")
+    print("ASDASDASDASDASD")
+    print("ASDASDASDASDASD")
+    print("ASDASDASDASDASD")
+    print("ASDASDASDASDASD")
+    print("ASDASDASDASDASD")
+    print("ASDASDASDASDASD")
+    print("ASDASDASDASDASD")
+    print("ASDASDASDASDASD")
+    print("ASDASDASDASDASD")
+    print("ASDASDASDASDASD")
+    print("ASDASDASDASDASD")
+    print("ASDASDASDASDASD")
+    print("ASDASDASDASDASD")
+    print("ASDASDASDASDASD")
+
     # 1. Reproducibility
     set_seed(SEED, deterministic=True)
 
