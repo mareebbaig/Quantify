@@ -15,7 +15,6 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from .calibration import run_calibration
 from .checkpointing import CheckpointManager
 from .config import TrainerConfig
 from .logger import ExperimentLogger
@@ -170,9 +169,6 @@ class Trainer:
         # LR history (for plotting)
         self._lr_history: List[float] = []
 
-        # Whether calibration has already run
-        self._calibrated: bool = False
-
     # ------------------------------------------------------------------
     # Primary entry point
     # ------------------------------------------------------------------
@@ -230,22 +226,6 @@ class Trainer:
 
             # Update QAT state (float → quant transition, BN freeze)
             self.qat_scheduler.step(epoch)
-
-            # Calibration: run once at the float → QAT boundary
-            if (
-                not self._calibrated
-                and epoch == self.config.quant_schedule.float_warmup_epochs
-                and self.val_loader is not None
-            ):
-                run_calibration(
-                    model       = self.model,
-                    data_loader = self.train_loader,
-                    n_batches   = self.config.quant_schedule.calibration_batches,
-                    device      = str(self.device),
-                    verbose     = True,
-                    reset_calibration=True,
-                )
-                self._calibrated = True
 
             # Training phase
             train_metrics = self._run_epoch(
