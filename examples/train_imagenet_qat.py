@@ -85,8 +85,8 @@ def parse_args() -> argparse.Namespace:
         default="ILSVRC/imagenet-1k",
         help="Hugging Face dataset name",
     )
-    d.add_argument("--num-workers", type=int, default=12,
-                   help="DataLoader worker processes. Rule of thumb: #CPU_cores / 2.")
+    d.add_argument("--num-workers", type=int, default=20,
+                   help="DataLoader worker processes. Rule of thumb: #physical_cores - 4.")
 
     # ---- Quantization ------------------------------------------------------
     q = p.add_argument_group("quantization")
@@ -304,8 +304,8 @@ def _build_dataloaders(args) -> tuple[DataLoader, DataLoader]:
     ])
 
     print(f"Loading ImageNet datasets from Hugging Face ({args.hf_dataset})...")
-    hf_train = load_dataset(args.hf_dataset, split="train",      trust_remote_code=True)
-    hf_val   = load_dataset(args.hf_dataset, split="validation", trust_remote_code=True)
+    hf_train = load_dataset(args.hf_dataset, split="train")
+    hf_val   = load_dataset(args.hf_dataset, split="validation")
 
     persistent = args.num_workers > 0
     prefetch   = args.prefetch_factor if args.num_workers > 0 else None
