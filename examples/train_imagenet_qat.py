@@ -108,9 +108,9 @@ def parse_args() -> argparse.Namespace:
     # ---- Training ----------------------------------------------------------
     t = p.add_argument_group("training")
     t.add_argument("--epochs", type=int, default=90)
-    t.add_argument("--batch-size", type=int, default=64)
-    t.add_argument("--lr", type=float, default=1e-3)
-    t.add_argument("--weight-decay", type=float, default=1e-4)
+    t.add_argument("--batch-size", type=int, default=1024)
+    t.add_argument("--lr", type=float, default=1e-4)
+    t.add_argument("--weight-decay", type=float, default=1e-5)
 
     # ---- QAT schedule ------------------------------------------------------
     s = p.add_argument_group("qat schedule")
