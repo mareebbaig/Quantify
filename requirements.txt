@@ -8,5 +8,6 @@ onnx==1.17.0
 inflect
 Pillow
 tqdm
+timm
 datasets==4.8.4
 ultralytics[dill]==8.4.18

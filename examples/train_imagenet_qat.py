@@ -214,21 +214,27 @@ def _build_model(args, weight_quant, act_quant, bias_quant) -> nn.Module:
 
 
 def _load_pretrained(model: nn.Module, args) -> nn.Module:
-    from torchvision.models import (
-        resnet18, ResNet18_Weights,
-        resnet50, ResNet50_Weights,
-        mobilenet_v2, MobileNet_V2_Weights,
-    )
-    if args.model == "resnet18":
-        float_model = resnet18(weights=ResNet18_Weights.DEFAULT)
-    elif args.model == "resnet50":
-        float_model = resnet50(weights=ResNet50_Weights.DEFAULT)
+    import timm
+    from torchvision.models import mobilenet_v2, MobileNet_V2_Weights
+
+    if args.model in ("resnet18", "resnet50"):
+        # timm provides better-trained weights than torchvision V1:
+        #   resnet18 → ~73.3% top-1  (vs torchvision V1 69.8%)
+        #   resnet50 → ~80.9% top-1  (vs torchvision V1 76.1%)
+        # timm's default ResNet uses the same parameter naming as torchvision,
+        # so the existing name-based weight mapping works without changes.
+        print(f"[pretrained] Loading timm/{args.model} pretrained weights …")
+        float_model = timm.create_model(args.model, pretrained=True)
     elif args.model == "mobilenetv2":
+        # timm's MobileNetV2 uses different layer naming; torchvision naming
+        # matches our QuantMobileNetV2 module structure directly.
+        print(f"[pretrained] Loading torchvision mobilenet_v2 pretrained weights …")
         float_model = mobilenet_v2(weights=MobileNet_V2_Weights.DEFAULT)
     else:
-        print(f"[pretrained] No torchvision pretrained weights for {args.model}, skipping.")
+        print(f"[pretrained] No pretrained weights for {args.model}, skipping.")
         return model
-    print(f"[pretrained] Mapping torchvision {args.model} weights …")
+
+    print(f"[pretrained] Mapping weights to quantized model …")
     return load_pretrained_weights(model, float_model)
 
 
