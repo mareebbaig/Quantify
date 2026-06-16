@@ -111,7 +111,7 @@ def parse_args() -> argparse.Namespace:
 
     # ---- Training ----------------------------------------------------------
     t = p.add_argument_group("training")
-    t.add_argument("--epochs", type=int, default=90)
+    t.add_argument("--epochs", type=int, default=150)
     t.add_argument("--batch-size", type=int, default=1024)
     t.add_argument("--lr", type=float, default=1e-4)
     t.add_argument("--weight-decay", type=float, default=1e-5)
@@ -152,13 +152,13 @@ def parse_args() -> argparse.Namespace:
     s.add_argument(
         "--annealing-steps",
         type=int,
-        default=500,
+        default=20,
         help="Forward passes over which each quantizer anneals 0→1",
     )
     s.add_argument(
         "--qat-gap",
         type=int,
-        default=200,
+        default=300,
         help="Forward passes between successive quantizer activations (staggered cascade)",
     )
 
