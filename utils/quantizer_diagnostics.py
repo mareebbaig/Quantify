@@ -300,6 +300,116 @@ def _save_plot(
 
 
 # ---------------------------------------------------------------------------
+# LSB search diagnostic plot
+# ---------------------------------------------------------------------------
+
+def _save_search_plot(
+    *,
+    search_records: list,
+    best_lsb: int,
+    quant_id: str,
+    trigger: str,
+    quantizer_role: str,
+    bit_width: int,
+    out_dir: Path,
+) -> None:
+    """Dual-axis plot of the LSB search: SAD bars (left) + unique-count line (right)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    if not search_records:
+        return
+
+    # Sort low → high for a natural left-to-right x-axis
+    records = sorted(search_records, key=lambda r: r[0])
+    lsb_vals  = [r[0] for r in records]
+    n_uniq    = [r[1] for r in records]
+    sad_vals  = [r[2] for r in records]
+    n_max     = 2 ** bit_width
+
+    fig, ax_sad = plt.subplots(figsize=(14, 5))
+    ax_uniq = ax_sad.twinx()
+
+    # ── SAD bars ────────────────────────────────────────────────────────────
+    bar_colors = ["orangered" if lsb == best_lsb else "steelblue" for lsb in lsb_vals]
+    ax_sad.bar(lsb_vals, sad_vals, color=bar_colors, alpha=0.75, width=0.6,
+               label="SAD (Sum of Absolute Differences)")
+    ax_sad.set_xlabel("LSB position")
+    ax_sad.set_ylabel("SAD", color="steelblue")
+    ax_sad.tick_params(axis="y", labelcolor="steelblue")
+
+    # ── Unique-values line ───────────────────────────────────────────────────
+    ax_uniq.plot(lsb_vals, n_uniq, color="green", marker="o", markersize=4,
+                 linewidth=1.5, label=f"Unique values")
+    ax_uniq.axhline(n_max, color="green", linestyle=":", linewidth=1.0, alpha=0.6,
+                    label=f"Max representable ({n_max})")
+    ax_uniq.set_ylabel(f"Unique values  (max {n_max})", color="green")
+    ax_uniq.tick_params(axis="y", labelcolor="green")
+    ax_uniq.set_ylim(bottom=0, top=n_max * 1.12)
+
+    # ── Selected LSB marker ─────────────────────────────────────────────────
+    ax_sad.axvline(best_lsb, color="red", linestyle="--", linewidth=1.5,
+                   label=f"Selected  LSB={best_lsb}")
+
+    # ── Integer x-ticks ─────────────────────────────────────────────────────
+    ax_sad.set_xticks(lsb_vals)
+    ax_sad.tick_params(axis="x", rotation=45)
+
+    # ── Combined legend ──────────────────────────────────────────────────────
+    h1, l1 = ax_sad.get_legend_handles_labels()
+    h2, l2 = ax_uniq.get_legend_handles_labels()
+    ax_sad.legend(h1 + h2, l1 + l2, loc="upper left", fontsize=8)
+
+    rule = ("highest LSB with max unique values"
+            if quantizer_role == "activation"
+            else "max unique values, SAD tie-break")
+    fig.suptitle(
+        f"LSB Search — {quant_id}  [{quantizer_role}]  [{trigger}]\n"
+        f"Rule: {rule}",
+        fontsize=10,
+    )
+    plt.tight_layout()
+
+    safe = trigger.replace(" ", "_")
+    base = out_dir / f"quantizer_{quant_id}_{safe}_lsb_search"
+    fig.savefig(base.with_suffix(".svg"), format="svg", bbox_inches="tight")
+    fig.savefig(base.with_suffix(".png"), dpi=400, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _append_search_log(
+    log_path: Path,
+    quant_id: str,
+    trigger: str,
+    search_records: list,
+    best_lsb: int,
+    quantizer_role: str,
+) -> None:
+    """Append a compact summary of the LSB search to the quantizer's log file."""
+    if not search_records:
+        return
+    records = sorted(search_records, key=lambda r: r[0])
+    lsb_vals = [r[0] for r in records]
+    rule = ("highest LSB with max unique values"
+            if quantizer_role == "activation"
+            else "max unique values, SAD tie-break")
+    lines = [
+        f"  ── LSB Search ({'activation' if quantizer_role == 'activation' else 'weight'} rule) ──",
+        f"  Positions tested : LSB {lsb_vals[0]} to {lsb_vals[-1]}  ({len(records)} positions)",
+        f"  Selection rule   : {rule}",
+        f"  Selected LSB     : {best_lsb}",
+        f"  {'LSB':>5}  {'Unique':>7}  {'SAD':>14}",
+        f"  {'───':>5}  {'──────':>7}  {'─────────────':>14}",
+    ]
+    for lsb, n_uniq, sad in records:
+        marker = " ◄" if lsb == best_lsb else ""
+        lines.append(f"  {lsb:>5}  {n_uniq:>7}  {sad:>14.4e}{marker}")
+    with open(log_path, "a") as fh:
+        fh.write("\n".join(lines) + "\n")
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -314,6 +424,7 @@ def run_diagnostics(
     quantizer_role: str = "unknown",
     trigger: str,
     out_dir: Path,
+    search_records: list = None,
 ) -> None:
     """
     Compute metrics on the full tensor (on its original device), then
@@ -345,3 +456,15 @@ def run_diagnostics(
 
     _append_log(log_path, quant_id, trigger, m)
     _save_plot(plot_path, x_cpu, q_cpu, quant_id, trigger, m)
+
+    if search_records:
+        _append_search_log(log_path, quant_id, trigger, search_records, lsb, quantizer_role)
+        _save_search_plot(
+            search_records=search_records,
+            best_lsb=lsb,
+            quant_id=quant_id,
+            trigger=trigger,
+            quantizer_role=quantizer_role,
+            bit_width=bit_width,
+            out_dir=Path(out_dir),
+        )

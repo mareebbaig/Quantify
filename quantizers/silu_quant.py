@@ -72,7 +72,7 @@ class SiLUTensorQuant(BaseQuantizer):
     def _calibrate(self, x: torch.Tensor) -> Any:
         """Calibrate by finding the optimal LSB for the SiLU output."""
         x_silu = torch.nn.functional.silu(x)
-        lsb, _ = find_optimal_lsb(
+        lsb, _, _ = find_optimal_lsb(
             x_silu, self.bit_width, self.signed, self.rounding_mode
         )
         return {'lsb': lsb}

@@ -141,35 +141,32 @@ def find_optimal_lsb(
     signed: bool,
     rounding_mode: "RoundingMode",
     narrow_range: bool = False,
-) -> Tuple[int, int]:
+    prefer_high_lsb: bool = False,
+) -> Tuple[int, int, list]:
     """
-    Search over LSB positions to find the one that maximises the number of
-    unique quantised values.  Ties are broken by smallest SAD (Sum of Absolute Differences).
+    Search over LSB positions to find the one that maximises unique quantised values.
 
-    Parameters
-    ----------
-    inputs : torch.Tensor
-        The floating-point input tensor.
-    bit_width : int
-        Total number of bits.
-    signed : bool
-        Whether to use signed representation.
-    rounding_mode : RoundingMode
-        Rounding mode for quantization.
-    narrow_range : bool
-        Whether to exclude the most-negative code in signed mode.
+    Two selection rules:
+      prefer_high_lsb=False (weights): ties broken by smallest SAD — prefers a
+        finer grid when multiple LSBs reach the same unique count.
+      prefer_high_lsb=True (activations): among all LSBs that reach the maximum
+        unique count, pick the HIGHEST one.  A higher LSB means a coarser step
+        but a wider representable range, which reduces clipping of the activation
+        distribution.  The iteration runs high→low, so the first LSB that reaches
+        the global maximum is also the highest one — no SAD tie-break is applied.
 
     Returns
     -------
-    int
-        The optimal LSB position.
+    (best_lsb, best_unique, search_records)
+        search_records is a list of (lsb, n_unique, sad) for every position tested,
+        ordered high→low, used by the diagnostic plot.
     """
     w_min = inputs.min().item()
     w_max = inputs.max().item()
     abs_max = max(abs(w_min), abs(w_max))
 
     if abs_max == 0.0:
-        return 0, 1  # all-zero tensor, LSB doesn't matter
+        return 0, 1, []  # all-zero tensor, LSB doesn't matter
 
     if signed:
         n_positive_codes = 2 ** (bit_width - 1) - 1
@@ -185,18 +182,28 @@ def find_optimal_lsb(
     best_lsb = search_lo
     best_unique = -1
     best_sad = float("inf")
+    search_records: list = []  # (lsb, n_unique, sad) — high to low
 
     for lsb in reversed(range(search_lo, search_hi + 1)):
         q = quantize_fixed_point(inputs, lsb, bit_width, signed, rounding_mode, narrow_range)
         n_unique = int(torch.unique(q).numel())
         sad = float(torch.sum(torch.abs(inputs - q)).item())
+        search_records.append((lsb, n_unique, sad))
 
-        if n_unique > best_unique or (n_unique == best_unique and sad < best_sad):
-            best_lsb = lsb
-            best_unique = n_unique
-            best_sad = sad
+        if prefer_high_lsb:
+            # Strict improvement only: first (highest) LSB with global max unique wins
+            if n_unique > best_unique:
+                best_lsb = lsb
+                best_unique = n_unique
+                best_sad = sad
+        else:
+            # Weight mode: ties broken by minimum SAD (finer grid preferred)
+            if n_unique > best_unique or (n_unique == best_unique and sad < best_sad):
+                best_lsb = lsb
+                best_unique = n_unique
+                best_sad = sad
 
-    return best_lsb, best_unique
+    return best_lsb, best_unique, search_records
 
 
 # ---------------------------------------------------------------------------
@@ -323,20 +330,24 @@ class FixedPointPerTensorQuantizer(BaseQuantizer):
 
     def _calibrate(self, x: torch.Tensor) -> Any:
         """Run calibration/search logic and return a params dict."""
-        # Use explicit signed setting from injector/constructor to align with Brevitas proxy
-        # signed = self.signed
         if torch.all(x >= 0.0):
             self.signed = False
         else:
             self.signed = True
-        lsb, num_unique = find_optimal_lsb(
+        lsb, num_unique, search_records = find_optimal_lsb(
             x,
             self.bit_width,
             self.signed,
             self.rounding_mode,
             self.narrow_range,
+            prefer_high_lsb=(self.quantizer_role == "activation"),
         )
-        return {'lsb': lsb, 'signed': self.signed, 'num_unique': num_unique}
+        return {
+            'lsb': lsb,
+            'signed': self.signed,
+            'num_unique': num_unique,
+            'search_records': search_records,
+        }
 
     def _save_calibration(self, params: Any) -> None:
         """Save calibration results to buffers."""
@@ -387,12 +398,15 @@ class FixedPointPerTensorQuantizer(BaseQuantizer):
         return scale, zero_point, bit_width
 
     def _get_diagnostics_params(self, params) -> dict:
-        return {
+        d = {
             "lsb":            int(params["lsb"]),
             "bit_width":      self.bit_width,
             "signed":         bool(params.get("signed", self.signed)),
             "quantizer_role": self.quantizer_role,
         }
+        if "search_records" in params:
+            d["search_records"] = params["search_records"]
+        return d
 
     def detect_signed(self, inputs: torch.Tensor) -> bool:
         """Return True if any input is negative. (Kept for backward compatibility / manual checks)"""
