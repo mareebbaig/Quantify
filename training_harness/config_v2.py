@@ -149,6 +149,10 @@ class TrainerConfigV2:
     def plot_dir(self) -> str:
         return os.path.join(self.output_dir, self.logging.plot_dir)
 
+    @property
+    def diagnostics_dir(self) -> str:
+        return os.path.join(self.output_dir, "quantizer_diagnostics")
+
     def make_run_dirs(self) -> None:
         for path in [self.checkpoint_dir, self.log_dir, self.plot_dir]:
             os.makedirs(path, exist_ok=True)

@@ -282,9 +282,9 @@ class TrainingPlotter:
     # ------------------------------------------------------------------
 
     def _save(self, fig, suffix: str) -> str:
-        fname = f"{self.experiment_name}_{suffix}.png"
+        fname = f"{self.experiment_name}_{suffix}.svg"
         path  = os.path.join(self.save_dir, fname)
-        fig.savefig(path, dpi=_DPI, bbox_inches="tight")
+        fig.savefig(path, format="svg", bbox_inches="tight")
         plt.close(fig)
         print(f"[plot] Saved → {path}")
         return path

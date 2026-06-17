@@ -49,6 +49,12 @@ class BaseQuantizer(nn.Module, ABC):
         # Register with manager for coordination
         self.quantizer_manager.register_quantizer(self)
 
+        # Diagnostics state (not buffers — ephemeral, not needed in checkpoints)
+        self._calibration_count: int = 0
+        self._was_annealing: bool = False
+        self._post_annealing_fired: bool = False
+        self._last_snapshot_seen: int = 0
+
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         if self.inference_sequence_id == -1:
             self.inference_sequence_id = self.quantizer_manager.get_inference_sequence_id()
@@ -68,7 +74,8 @@ class BaseQuantizer(nn.Module, ABC):
         # 2. Calibration check
         is_exporting = torch.onnx.is_in_onnx_export()
         should_calibrate = not self.search_done.item() or self.quantizer_manager.force_recalibration
-        
+        _calibration_triggered = should_calibrate and not is_exporting
+
         if not is_exporting and should_calibrate:
             params = self._calibrate(x)
             self._save_calibration(params)
@@ -76,18 +83,23 @@ class BaseQuantizer(nn.Module, ABC):
             self.quantizer_manager.reset_global_flag()
         else:
             params = self._load_calibration()
-            
+
         # 3. Quantize & format output
         quantized = self._quantize(x, params)
         scale, zero_point, bit_width = self._get_metadata(params, x)
 
+        alpha_before = self.annealing_alpha.item()
         if self.annealing_alpha < 1.0:
             result = (1 - self.annealing_alpha) * x + self.annealing_alpha * quantized
             if self.training:
-                new_alpha = min(self.annealing_alpha.item() + self.annealing_alpha_step, 1.0)
+                new_alpha = min(alpha_before + self.annealing_alpha_step, 1.0)
                 self.annealing_alpha.data.fill_(new_alpha)
         else:
             result = quantized
+
+        # 4. Diagnostics (runs only when diagnostics_dir is set; never in ONNX export)
+        if not is_exporting and self.quantizer_manager.diagnostics_dir is not None:
+            self._maybe_run_diagnostics(x, quantized, params, _calibration_triggered, alpha_before)
 
         return result, scale, zero_point, bit_width
 
@@ -116,3 +128,62 @@ class BaseQuantizer(nn.Module, ABC):
     def _get_metadata(self, params: Any, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Return scale, zero_point, and bit_width tensors matching x's dtype/device."""
         raise NotImplementedError
+
+    def _get_diagnostics_params(self, params: Any) -> Optional[dict]:
+        """
+        Return {lsb, bit_width, signed} for diagnostics, or None to skip.
+        Override in subclasses that have a well-defined LSB / step size.
+        """
+        return None
+
+    def _maybe_run_diagnostics(
+        self,
+        x: torch.Tensor,
+        quantized: torch.Tensor,
+        params: Any,
+        calibration_triggered: bool,
+        alpha_before: float,
+    ) -> None:
+        diag_params = self._get_diagnostics_params(params)
+        if diag_params is None:
+            return
+
+        from pathlib import Path
+        from utils.quantizer_diagnostics import run_diagnostics
+
+        out_dir = Path(self.quantizer_manager.diagnostics_dir)
+        qid = getattr(self, "quant_id", "unknown")
+
+        def _emit(trigger: str) -> None:
+            run_diagnostics(
+                quant_id=qid,
+                x=x,
+                quantized=quantized,
+                trigger=trigger,
+                out_dir=out_dir,
+                **diag_params,
+            )
+
+        # Track whether annealing was ever active on this quantizer
+        if alpha_before < 1.0:
+            self._was_annealing = True
+
+        # Trigger 1: calibration just ran successfully
+        if calibration_triggered and self.search_done.item():
+            self._calibration_count += 1
+            _emit(f"calibration_{self._calibration_count}")
+
+        # Trigger 2: annealing just finished (alpha crossed 1.0 this pass)
+        if (
+            self.annealing_alpha.item() >= 1.0
+            and self._was_annealing
+            and not self._post_annealing_fired
+        ):
+            self._post_annealing_fired = True
+            _emit("post_annealing")
+
+        # Trigger 3: snapshot requested by manager
+        mgr_snap = self.quantizer_manager._snapshot_count
+        if mgr_snap > self._last_snapshot_seen:
+            self._last_snapshot_seen = mgr_snap
+            _emit(f"snapshot_{mgr_snap:04d}")

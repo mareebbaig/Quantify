@@ -32,6 +32,7 @@ class BaseWeightQuant(Injector):
     proxy_class = WeightQuantProxyFromInjector
     bit_width = 8
     signed = True
+    quantizer_role = "weight"
 
 
 class BaseActivationQuant(Injector):
@@ -40,3 +41,4 @@ class BaseActivationQuant(Injector):
     proxy_class = ActivationQuantProxyFromInjector
     bit_width = 8
     signed = False
+    quantizer_role = "activation"

@@ -309,11 +309,13 @@ class FixedPointPerTensorQuantizer(BaseQuantizer):
         signed: bool = True,
         rounding_mode: RoundingMode = RoundingMode.ROUND,
         narrow_range: bool = False,
+        quantizer_role: str = "unknown",
     ):
         super().__init__(bit_width=bit_width)
         self.signed = signed
         self.rounding_mode = rounding_mode
         self.narrow_range = narrow_range
+        self.quantizer_role = quantizer_role
         
         # Register search results as buffers to ensure they are serialized in state_dict
         self.register_buffer('search_result_is_signed', torch.tensor(signed, dtype=torch.bool))
@@ -383,6 +385,14 @@ class FixedPointPerTensorQuantizer(BaseQuantizer):
         zero_point = torch.tensor(0.0, dtype=x.dtype, device=x.device)
         bit_width = torch.tensor(float(self.bit_width), dtype=x.dtype, device=x.device)
         return scale, zero_point, bit_width
+
+    def _get_diagnostics_params(self, params) -> dict:
+        return {
+            "lsb":            int(params["lsb"]),
+            "bit_width":      self.bit_width,
+            "signed":         bool(params.get("signed", self.signed)),
+            "quantizer_role": self.quantizer_role,
+        }
 
     def detect_signed(self, inputs: torch.Tensor) -> bool:
         """Return True if any input is negative. (Kept for backward compatibility / manual checks)"""
@@ -456,3 +466,4 @@ class FixedPointPerTensorBiasQuant(BaseWeightQuant):
     narrow_range = False
     signed = True  # Explicitly declared to match proxy expectation
     tensor_quant = FixedPointPerTensorQuantizer
+    quantizer_role = "bias"

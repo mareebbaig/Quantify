@@ -172,6 +172,12 @@ class QATTrainerV2:
         log_hardware_info(self.logger)
         self.logger.log_hparams(self.config.to_dict())
 
+        import os as _os
+        abs_logs  = _os.path.abspath(self.config.log_dir)
+        abs_ckpt  = _os.path.abspath(self.config.checkpoint_dir)
+        abs_plots = _os.path.abspath(self.config.plot_dir)
+        abs_diag  = _os.path.abspath(self.config.diagnostics_dir)
+
         print(f"\n{'═'*60}")
         print(f"  Experiment : {self.config.experiment_name}")
         print(f"  Run ID     : {self.config.run_id}")
@@ -179,6 +185,11 @@ class QATTrainerV2:
         print(f"  Epochs     : {self.config.epochs}")
         print(f"  Warmup     : {self.config.qat.float_warmup_epochs} epochs")
         print(f"  Gap/Anneal : {self.config.qat.quantization_start_gap} / {self.config.qat.annealing_steps}")
+        print(f"  ── Output paths ──────────────────────────────────────")
+        print(f"  Logs       : {abs_logs}")
+        print(f"  Checkpoints: {abs_ckpt}")
+        print(f"  Plots      : {abs_plots}")
+        print(f"  Diagnostics: {abs_diag}")
         print(f"{'═'*60}\n")
 
         # Reset singleton state from any prior run, then re-register this model's
@@ -321,6 +332,7 @@ class QATTrainerV2:
         mgr = QuantizerManager()
         mgr.set_annealing_for_n_inferences(self.config.qat.annealing_steps)
         mgr.quantization_start_gap = self.config.qat.quantization_start_gap
+        mgr.diagnostics_dir = self.config.diagnostics_dir
 
         if self.config.qat.freeze_bn_at_qat:
             freeze_bn(self.model)
@@ -329,7 +341,8 @@ class QATTrainerV2:
         print(
             f"\n[trainer_v2] QAT activated ✓  "
             f"({n_quantizers} quantizers, gap={self.config.qat.quantization_start_gap}, "
-            f"anneal={self.config.qat.annealing_steps} passes)"
+            f"anneal={self.config.qat.annealing_steps} passes)\n"
+            f"  Quantizer diagnostics → {self.config.diagnostics_dir}"
         )
 
     # ------------------------------------------------------------------

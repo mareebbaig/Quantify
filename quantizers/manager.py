@@ -16,7 +16,7 @@ class QuantizerManager:
         if hasattr(self, '_initialized'):
             return
         self._initialized = True
-        
+
         # Global flag to force all quantizers to re-run their search/calibration
         self.force_recalibration = False
         self.quantization_start_gap = 0
@@ -25,6 +25,9 @@ class QuantizerManager:
         # Counter to generate unique identifiers
         self._id_counter = 0
         self._inference_sequence_id_counter = 0
+        # Diagnostics
+        self.diagnostics_dir = None   # set by trainer; None disables diagnostics
+        self._snapshot_count = 0      # incremented by request_snapshot()
 
     def reset(self):
         """
@@ -35,6 +38,8 @@ class QuantizerManager:
         self.quantizers.clear()
         self._id_counter = 0
         self._inference_sequence_id_counter = 0
+        self.diagnostics_dir = None
+        self._snapshot_count = 0
 
     @property
     def is_quantizing_everything_fully(self):
@@ -99,3 +104,7 @@ class QuantizerManager:
     def reset_global_flag(self):
         """Resets the global recalibration flag."""
         self.force_recalibration = False
+
+    def request_snapshot(self) -> None:
+        """Ask every quantizer to emit a diagnostics snapshot on its next forward pass."""
+        self._snapshot_count += 1
