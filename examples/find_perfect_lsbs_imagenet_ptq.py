@@ -234,12 +234,19 @@ def _evaluate(
     loss_fn: nn.Module,
     device: torch.device,
     max_batches: Optional[int],
+    label: str = "",
 ) -> Tuple[float, float]:
-    """Returns (avg_loss, accuracy_percent) over up to max_batches batches."""
+    """Returns (avg_loss, accuracy_percent) over up to max_batches batches.
+
+    Prints a live \r progress line while running so the user can track how
+    far through the validation set each LSB evaluation has progressed.
+    """
     model.eval()
     total_loss = 0.0
     correct    = 0
     total      = 0
+    n_batches  = max_batches if max_batches is not None else "?"
+    prefix     = f"    {label}" if label else "   "
     for i, (images, labels) in enumerate(loader):
         if max_batches is not None and i >= max_batches:
             break
@@ -249,6 +256,14 @@ def _evaluate(
         total_loss += loss_fn(outputs, labels).item() * images.size(0)
         correct    += outputs.argmax(1).eq(labels).sum().item()
         total      += images.size(0)
+        running_loss = total_loss / total
+        running_acc  = 100.0 * correct / total
+        print(
+            f"{prefix}  batch [{i+1}/{n_batches}]"
+            f"  loss={running_loss:.4f}  acc={running_acc:.2f}%   ",
+            end="\r", flush=True,
+        )
+    print()  # newline after the \r progress line
     if total == 0:
         return float("inf"), 0.0
     return total_loss / total, 100.0 * correct / total
@@ -618,7 +633,7 @@ def main() -> None:
     # ── Baseline evaluation (all quantizers disabled = float precision) ───────
     print("Baseline evaluation (no quantization) …")
     baseline_loss, baseline_acc = _evaluate(model, val_loader, loss_fn, device,
-                                             args.eval_batches)
+                                             args.eval_batches, label="baseline")
     print(f"  val_loss={baseline_loss:.4f}  val_acc={baseline_acc:.2f}%\n")
 
     with open(log_path, "a") as fh:
@@ -670,12 +685,16 @@ def main() -> None:
         # triggers on the first or second step here.
         calib_steps = 0
         while not q.search_done.item():
+            calib_steps += 1
+            print(f"  calib step {calib_steps} (inference_counter={q.inference_counter}"
+                  f"  need≥{q.inference_sequence_id * mgr.quantization_start_gap}) …",
+                  end="\r", flush=True)
             optimizer.zero_grad()
             outputs = model(calib_images)
             loss = loss_fn(outputs, calib_labels)
             loss.backward()
             optimizer.step()
-            calib_steps += 1
+        print()  # newline after \r
 
         calib_lsb    = int(q.search_result_lsb.item())
         calib_signed = bool(q.search_result_is_signed.item())
@@ -688,15 +707,19 @@ def main() -> None:
                                 calib_lsb + args.search_radius + 1))
         results: List[Tuple[int, float, float]] = []
 
-        for candidate_lsb in candidates:
+        n_candidates = len(candidates)
+        for ci, candidate_lsb in enumerate(candidates, start=1):
             q.search_result_lsb.fill_(candidate_lsb)
             q.search_done.fill_(True)
 
-            v_loss, v_acc = _evaluate(model, val_loader, loss_fn, device, args.eval_batches)
+            tag = " (calibrated)" if candidate_lsb == calib_lsb else ""
+            print(f"  [{ci}/{n_candidates}] evaluating LSB={candidate_lsb}{tag} …")
+            v_loss, v_acc = _evaluate(model, val_loader, loss_fn, device, args.eval_batches,
+                                      label=f"LSB={candidate_lsb}")
             results.append((candidate_lsb, v_loss, v_acc))
 
-            tag = " ← calibrated" if candidate_lsb == calib_lsb else ""
-            print(f"  LSB={candidate_lsb:4d}  val_loss={v_loss:.4f}  val_acc={v_acc:.2f}%{tag}")
+            result_tag = " ← calibrated" if candidate_lsb == calib_lsb else ""
+            print(f"  LSB={candidate_lsb:4d}  val_loss={v_loss:.4f}  val_acc={v_acc:.2f}%{result_tag}")
 
         # ── Select best LSB (min val_loss) ─────────────────────────────────────
         best_lsb = min(results, key=lambda r: r[1])[0]
@@ -741,7 +764,8 @@ def main() -> None:
     # ── Final evaluation ──────────────────────────────────────────────────────
     print(f"\n{sep}")
     print("Final evaluation (all optimized quantizers active) …")
-    final_loss, final_acc = _evaluate(model, val_loader, loss_fn, device, args.eval_batches)
+    final_loss, final_acc = _evaluate(model, val_loader, loss_fn, device, args.eval_batches,
+                                      label="final")
     print(f"  val_loss={final_loss:.4f}  val_acc={final_acc:.2f}%")
     print(f"  Baseline:  val_loss={baseline_loss:.4f}  val_acc={baseline_acc:.2f}%")
     print(f"  Δ:         val_loss={final_loss - baseline_loss:+.4f}"
