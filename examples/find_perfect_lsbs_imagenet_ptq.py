@@ -29,17 +29,17 @@ Usage examples
 --------------
 # ResNet-18, search weight LSBs (±2 positions), pretrained, local ImageFolder:
 python examples/find_perfect_lsbs_imagenet_ptq.py \\
-    --model resnet18 --mode weights --weight-bits 8 --pretrained \\
+    --model resnet18 --mode weights --pretrained \\
     --data-dir /data/imagenet --search-radius 2
 
 # ResNet-18, search activation LSBs on HuggingFace, quick eval (100 batches):
 python examples/find_perfect_lsbs_imagenet_ptq.py \\
-    --model resnet18 --mode activations --act-bits 8 --pretrained \\
+    --model resnet18 --mode activations --pretrained \\
     --hf-dataset ILSVRC/imagenet-1k --eval-batches 100
 
-# ResNet-50, weight search with radius 1 (only direct neighbours):
+# ResNet-50, weight search at 8 bits with radius 1 (only direct neighbours):
 python examples/find_perfect_lsbs_imagenet_ptq.py \\
-    --model resnet50 --mode weights --weight-bits 8 --pretrained \\
+    --model resnet50 --mode weights --bit-width 8 --pretrained \\
     --data-dir /data/imagenet --search-radius 1
 """
 
@@ -89,8 +89,8 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="Quantize weights or activations (not both — biases are skipped)",
     )
-    p.add_argument("--weight-bits", type=int, default=8, help="Bit width for weight quantizers")
-    p.add_argument("--act-bits",    type=int, default=8, help="Bit width for activation quantizers")
+    p.add_argument("--bit-width", type=int, default=10,
+                   help="Bit width applied to whichever quantizer role is selected by --mode")
     p.add_argument("--num-classes", type=int, default=1000)
     p.add_argument(
         "--pretrained",
@@ -110,7 +110,7 @@ def parse_args() -> argparse.Namespace:
     )
     d.add_argument("--num-workers",  type=int, default=8)
     d.add_argument("--dali-threads", type=int, default=4)
-    d.add_argument("--batch-size",   type=int, default=128)
+    d.add_argument("--batch-size",   type=int, default=512)
 
     s = p.add_argument_group("search")
     s.add_argument(
@@ -546,14 +546,13 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # ── Quantizer injector classes ───────────────────────────────────────────
+    bw = args.bit_width
     if args.mode == "weights":
-        bw = args.weight_bits
         class _WQ(FixedPointPerTensorWeightQuant):
             bit_width = bw
         weight_quant, act_quant = _WQ, None
         target_role = "weight"
     else:
-        bw = args.act_bits
         class _AQ(FixedPointPerTensorActivationQuant):
             bit_width = bw
         weight_quant, act_quant = None, _AQ
