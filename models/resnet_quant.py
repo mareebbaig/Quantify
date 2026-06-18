@@ -141,7 +141,9 @@ class QuantResNet(nn.Module):
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
 
+        self.input_quant = _quant_identity(act_quant)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.post_pool_quant = _quant_identity(act_quant)
         self.flatten = nn.Flatten()
         fc_kw = {"bias_quant": bias_quant} if bias_quant is not None else {}
         self.fc = qnn.QuantLinear(
@@ -177,6 +179,8 @@ class QuantResNet(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x):
+        if self.input_quant is not None:
+            x = self.input_quant(x)
         x = self.relu(self.bn1(self.conv1(x)))
         x = self.maxpool(x)
         x = self.layer1(x)
@@ -184,6 +188,8 @@ class QuantResNet(nn.Module):
         x = self.layer3(x)
         x = self.layer4(x)
         x = self.avgpool(x)
+        if self.post_pool_quant is not None:
+            x = self.post_pool_quant(x)
         x = self.flatten(x)
         return self.fc(x)
 

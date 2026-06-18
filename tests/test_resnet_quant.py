@@ -185,6 +185,35 @@ class TestDownsampleQuantization:
 # 4. Flatten module test
 # ---------------------------------------------------------------------------
 
+class TestInputAndPoolQuantization:
+
+    def test_input_quant_present_with_act_quant(self, rn18_full):
+        """QuantResNet must have a QuantIdentity before conv1 to quantize the network input."""
+        assert hasattr(rn18_full, "input_quant"), "input_quant attribute missing"
+        assert isinstance(rn18_full.input_quant, qnn.QuantIdentity), (
+            f"Expected QuantIdentity for input_quant, got {type(rn18_full.input_quant)}"
+        )
+
+    def test_input_quant_absent_without_act_quant(self, rn18_float):
+        quant = getattr(rn18_float, "input_quant", None)
+        assert quant is None
+
+    def test_post_pool_quant_present_with_act_quant(self, rn18_full):
+        """QuantResNet must quantize the avgpool output before the FC layer."""
+        assert hasattr(rn18_full, "post_pool_quant"), "post_pool_quant attribute missing"
+        assert isinstance(rn18_full.post_pool_quant, qnn.QuantIdentity), (
+            f"Expected QuantIdentity for post_pool_quant, got {type(rn18_full.post_pool_quant)}"
+        )
+
+    def test_post_pool_quant_absent_without_act_quant(self, rn18_float):
+        quant = getattr(rn18_float, "post_pool_quant", None)
+        assert quant is None
+
+    def test_resnet50_has_input_and_post_pool_quant(self, rn50_full):
+        assert isinstance(rn50_full.input_quant, qnn.QuantIdentity)
+        assert isinstance(rn50_full.post_pool_quant, qnn.QuantIdentity)
+
+
 class TestFlattenModule:
 
     def test_resnet18_has_flatten_module(self, rn18_full):

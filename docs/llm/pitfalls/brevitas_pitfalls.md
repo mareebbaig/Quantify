@@ -113,6 +113,13 @@ downsample = nn.Sequential(*ds_modules)
 
 `QuantIdentity` accepts `act_quant` injectors designed for activations. The `FixedPointPerTensorQuantizer` auto-detects signed/unsigned during calibration, so it correctly handles the negative BN outputs on the pre-add path even though `FixedPointPerTensorActivationQuant` defaults to `signed=False`.
 
+Two additional boundary points also require `QuantIdentity`:
+
+- **Network input** (before the first conv): the raw float image must be quantized before entering the stem. Add `self.input_quant = QuantIdentity(act_quant=act_quant)` and call it at the top of `forward()`.
+- **`AdaptiveAvgPool2d` output** (before the FC layer): avgpool computes a spatial mean of quantized values, which lands off the quantization grid. Add `self.post_pool_quant = QuantIdentity(act_quant=act_quant)` and call it after avgpool. `MaxPool2d` does *not* need this treatment — selecting a max from quantized values stays on the grid.
+
+The FC output (logits) should intentionally remain unquantized.
+
 ## 8. Custom ONNX Nodes Don't Run in ORT
 **When this happens:** You export a model with `Quantify::CustomOp` and expect ONNX Runtime to execute it natively.
 **The Problem:** ORT only executes standard ONNX ops or registered custom kernels. Unregistered `Quantify::` nodes will cause fallback warnings or runtime errors.
