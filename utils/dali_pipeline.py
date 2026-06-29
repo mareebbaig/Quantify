@@ -63,7 +63,7 @@ def _train_pipeline(file_root: str, num_shards: int, shard_id: int, crop: int = 
     images = fn.color_twist(
         images,
         device="gpu",
-        saturation=fn.random.uniform(range=(0.0, 9.5)),
+        saturation=fn.random.uniform(range=(0.5, 1.5)),
     )
     images = fn.crop_mirror_normalize(
         images,
