@@ -154,6 +154,15 @@ def parse_args() -> argparse.Namespace:
              "(mutually exclusive with --weight-bits)",
     )
     q.add_argument("--bias-bits", type=int, default=8, help="Bias bit width")
+    q.add_argument(
+        "--weight-lsb-subtract",
+        type=int,
+        default=0,
+        metavar="N",
+        help="After loading --init-from-ptq, subtract N from every weight quantizer's "
+             "LSB position (finer grid). Implicitly disables all activation quantizers. "
+             "A before/after table is printed as a sanity check.",
+    )
 
     # ---- Training ----------------------------------------------------------
     t = p.add_argument_group("training")
@@ -395,6 +404,55 @@ def _load_ptq_checkpoint(model: nn.Module, ckpt_path: str) -> nn.Module:
     return model
 
 
+def _disable_act_quant_proxies(model: nn.Module) -> None:
+    """Set disable_quant=True on all activation proxies (leaves weight/bias proxies alone)."""
+    from brevitas.proxy.parameter_quant import WeightQuantProxyFromInjector, BiasQuantProxyFromInjector
+    for m in model.modules():
+        if hasattr(m, "disable_quant") and not isinstance(
+            m, (WeightQuantProxyFromInjector, BiasQuantProxyFromInjector)
+        ):
+            m.disable_quant = True
+
+
+def _apply_weight_lsb_subtract(model: nn.Module, delta: int) -> None:
+    """
+    Subtract `delta` from every weight quantizer's search_result_lsb buffer,
+    then disable all activation quantizer proxies.
+
+    Prints a before/after table for each adjusted quantizer so the caller can
+    verify the shift is correct before training starts.
+    """
+    from quantizers.fixedpoint_per_tensor import FixedPointPerTensorQuantizer
+
+    col = 62
+    print(f"\n[weight-lsb-subtract] Subtracting {delta} from all weight quantizer LSBs")
+    print(f"  {'Module path':<{col}}  {'Before':>6}  {'After':>6}  Check")
+    print(f"  {'-'*col}  {'-'*6}  {'-'*6}  -----")
+
+    n = 0
+    for name, module in model.named_modules():
+        if not isinstance(module, FixedPointPerTensorQuantizer):
+            continue
+        if "weight_quant" not in name:
+            continue
+
+        before = int(module.search_result_lsb.item())
+        after  = before - delta
+        module.search_result_lsb.fill_(after)
+        readback = int(module.search_result_lsb.item())
+        ok = "OK" if readback == after else f"MISMATCH (got {readback})"
+        print(f"  {name:<{col}}  {before:>6}  {after:>6}  {ok}")
+        n += 1
+
+    if n == 0:
+        print("  WARNING: no weight quantizers found — load a PTQ checkpoint first.")
+    else:
+        print(f"\n  {n} quantizer(s) adjusted.")
+
+    _disable_act_quant_proxies(model)
+    print("  Activation quantizer proxies disabled for this run.\n")
+
+
 # ---------------------------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------------------------
@@ -514,6 +572,9 @@ def main() -> None:
     if args.init_from_ptq:
         model = _load_ptq_checkpoint(model, args.init_from_ptq)
 
+    if args.weight_lsb_subtract:
+        _apply_weight_lsb_subtract(model, args.weight_lsb_subtract)
+
     # Data
     train_loader, val_loader = _build_dataloaders(args)
 
@@ -604,7 +665,14 @@ def main() -> None:
     trainer.evaluate(train_loader, label="train")
     print()
 
-    tracker = trainer.fit()
+    # When --weight-lsb-subtract is active, re-disable activation proxies after
+    # every epoch so QAT activation (which re-enables all proxies) can't undo it.
+    epoch_hook = None
+    if args.weight_lsb_subtract:
+        def epoch_hook(trainer, epoch, snap):
+            _disable_act_quant_proxies(trainer.model)
+
+    tracker = trainer.fit(after_epoch_hook=epoch_hook)
 
     best_acc = tracker.best_value("val_acc", "max")
     print(f"\nDone. Best val_acc: {best_acc:.4f}")
