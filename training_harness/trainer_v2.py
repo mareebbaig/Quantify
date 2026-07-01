@@ -29,6 +29,7 @@ from torch.utils.data import DataLoader
 
 from .checkpointing import CheckpointManager
 from .config_v2 import TrainerConfigV2
+from .console import TrainingConsole
 from .logger import ExperimentLogger
 from .metrics import MetricsTracker
 from .plotting import TrainingPlotter
@@ -273,6 +274,9 @@ class QATTrainerV2:
             min_delta=self.config.qat.plateau_min_delta,
         )
 
+        console = TrainingConsole(self)
+        console.start()
+
         start_epoch = 0
         if resume:
             start_epoch = self.checkpoint_mgr.resume(
@@ -354,6 +358,8 @@ class QATTrainerV2:
                 snap = self.tracker.history[-1] if self.tracker.history else None
                 after_epoch_hook(self, epoch, snap)
 
+            console.drain(epoch)
+
             if stop:
                 print(f"\n[trainer_v2] Early stopping at epoch {epoch}. "
                       f"Best {self.config.checkpoint.monitor_metric}: "
@@ -362,6 +368,11 @@ class QATTrainerV2:
                     self.early_stopper.restore(self.model)
                 break
 
+            if console.stop_requested:
+                print(f"\n[console] Stopped at epoch {epoch}.")
+                break
+
+        console.stop()
         self._post_training()
         return self.tracker
 
