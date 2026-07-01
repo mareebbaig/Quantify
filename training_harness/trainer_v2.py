@@ -547,7 +547,8 @@ class QATTrainerV2:
         parts = [f"Epoch {epoch:4d}/{self.config.epochs - 1}"]
         parts.append(f"  {elapsed:5.1f}s  ETA {eta}")
         for k, v in metrics.items():
-            parts.append(f"  {k}: {v:.4f}")
+            fmt = f"{v:.2e}" if (isinstance(v, float) and 0 < abs(v) < 1e-3) else f"{v:.4f}"
+            parts.append(f"  {k}: {fmt}")
 
         if not self._qat_active:
             parts.append("  [float]")
