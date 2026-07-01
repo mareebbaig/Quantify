@@ -133,7 +133,8 @@ def quantize_fixed_point(inputs: torch.Tensor, lsb: int, bit_width: int, signed:
     torch.Tensor
         Quantized (dequantized) input tensor on the fixed-point grid.
     """
-    quantized, _ = quantize_fixed_point_with_integers(inputs, lsb, bit_width, signed, rounding_mode, narrow_range)
+    quantized, _, _, _ = FixedPointQuantFnTestingThings.apply(inputs, lsb, bit_width, signed, rounding_mode, narrow_range)
+    # quantized, _ =  quantize_fixed_point_with_integers(inputs, lsb, bit_width, signed, rounding_mode, narrow_range)
 
     return quantized
 
@@ -239,6 +240,26 @@ def _round(x: torch.Tensor, mode: RoundingMode) -> torch.Tensor:
 # ONNX Custom Node Shim
 # ---------------------------------------------------------------------------
 
+class FixedPointQuantFnTestingThings(Function):
+    """Symbolic shim: emits a single `Quantify::FixedPointQuant` ONNX node."""
+    # inputs, lsb, bit_width, signed, rounding_mode, narrow_range
+    @staticmethod
+    def forward(ctx, x, lsb, bit_width, signed, rounding_mode, narrow_range):
+        # Compute quantization for PyTorch inference/tracing
+        quantized, integers = quantize_fixed_point_with_integers(
+            x, int(lsb), int(bit_width), signed, rounding_mode, narrow_range
+        )
+
+        bw = torch.tensor(float(bit_width), dtype=x.dtype, device=x.device)
+        return quantized, 0.0, 0.0, bw
+
+    @staticmethod
+    def backward(ctx, grad_quantized, grad_scale, grad_zero_point, grad_bw):
+        print("grad_quantizedgrad_quantized", grad_quantized)
+        # Straight-Through Estimator: pass gradient through for the first input
+        return grad_quantized, None, None, None, None, None, None, None
+
+
 class FixedPointQuantFn(Function):
     """Symbolic shim: emits a single `Quantify::FixedPointQuant` ONNX node."""
     
@@ -289,6 +310,7 @@ class FixedPointQuantFn(Function):
 
     @staticmethod
     def backward(ctx, grad_quantized, grad_scale, grad_zero_point, grad_bw):
+        print("grad_quantizedgrad_quantized", grad_quantized)
         # Straight-Through Estimator: pass gradient through for the first input
         return grad_quantized, None, None, None, None, None, None, None
 

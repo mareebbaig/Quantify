@@ -37,6 +37,31 @@ EXPECTED_B_GRAD = -6.0
 EXPECTED_Y_HAT = 7.0
 TOL = 1e-4
 
+def print_graph(fn, depth=0, seen=None, input_idx=None):
+    if seen is None:
+        seen = set()
+    if fn is None:
+        return
+    prefix = "  " * depth
+    label = type(fn).__name__
+    if input_idx is not None:
+        label = f"[input {input_idx}] {label}"
+
+    if fn in seen:
+        print(prefix + label + "  (repeated, see above)")
+        return
+    seen.add(fn)
+
+    # AccumulateGrad wraps a leaf tensor, show its actual identity
+    if hasattr(fn, "variable"):
+        var = fn.variable
+        print(f"{prefix}{label}  shape={tuple(var.shape)} dtype={var.dtype} "
+              f"requires_grad={var.requires_grad} id={id(var)}")
+    else:
+        print(prefix + label)
+
+    for idx, (next_fn, output_nr) in enumerate(fn.next_functions):
+        print_graph(next_fn, depth + 1, seen, input_idx=idx)
 
 @pytest.fixture(autouse=True)
 def reset_manager():
@@ -83,6 +108,13 @@ def test_sanity_baseline_no_quantizer():
     loss = (y_hat - y) ** 2
     loss.backward()
 
+    # x = torch.randn(4, requires_grad=True)
+    # x_round = torch.round(x)
+    # x_q = x + (x_round - x).detach()
+
+    print("PRINT GRAPH")
+    print_graph(loss.grad_fn)
+
     # No quantizer in the graph at all, so this must be exact.
     assert torch.isclose(w.grad, torch.tensor(EXPECTED_W_GRAD), atol=TOL)
     assert torch.isclose(b.grad, torch.tensor(EXPECTED_B_GRAD), atol=TOL)
@@ -111,6 +143,15 @@ def test_ste_off_annealing_alpha_zero():
     loss.backward()
 
     print(f"quantized_w: {quantized_w}")
+    print("loss", loss)
+    print("w.grad", w.grad)
+
+    # x = torch.randn(4, requires_grad=True)
+    # x_round = torch.round(x)
+    # x_q = x + (x_round - x).detach()
+
+    print("PRINT GRAPH")
+    print_graph(loss.grad_fn)
 
     assert torch.isclose(w.grad, torch.tensor(EXPECTED_W_GRAD), atol=TOL), (
         f"OFF state: expected w.grad={EXPECTED_W_GRAD}, got {w.grad.item()}"
@@ -145,6 +186,17 @@ def test_ste_on_annealing_alpha_one():
     loss = (y_hat - y) ** 2
     loss.backward()
 
+    print(f"quantized_w: {quantized_w}")
+    print("loss", loss)
+    print("w.grad", w.grad)
+
+    # x = torch.randn(4, requires_grad=True)
+    # x_round = torch.round(x)
+    # x_q = x + (x_round - x).detach()
+
+    print("PRINT GRAPH")
+    print_graph(loss.grad_fn)
+
     assert torch.isclose(w.grad, torch.tensor(EXPECTED_W_GRAD), atol=TOL), (
         f"ON state (STE check): expected w.grad={EXPECTED_W_GRAD}, "
         f"got {w.grad.item()} -- gradients are not flowing straight-through "
@@ -178,6 +230,17 @@ def test_ste_annealing_alpha_half():
 
     loss = (y_hat - y) ** 2
     loss.backward()
+
+    print(f"quantized_w: {quantized_w}")
+    print("loss", loss)
+    print("w.grad", w.grad)
+
+    # x = torch.randn(4, requires_grad=True)
+    # x_round = torch.round(x)
+    # x_q = x + (x_round - x).detach()
+
+    print("PRINT GRAPH")
+    print_graph(loss.grad_fn)
 
     actual_w_grad = w.grad.item()
     assert torch.isclose(w.grad, torch.tensor(EXPECTED_W_GRAD), atol=TOL), (
