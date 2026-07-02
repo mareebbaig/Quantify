@@ -654,7 +654,7 @@ def test_rounded_ste_annealing_alpha_half():
     loss = (y_hat - y) ** 2
     loss.backward()
 
-    print(f"w: {w.item()}  quantized_w (blend result): {quantized_w.item()}")
+    print(f"w: {w.item()}  quantized_w: {quantized_w.item()}")
     print("PRINT GRAPH (rounded, alpha=0.5)")
     print_graph(loss.grad_fn)
 
