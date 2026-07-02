@@ -401,16 +401,13 @@ def test_two_layer_ste_annealing_alpha_half():
 
 
 # ---------------------------------------------------------------------------
-# NOTE: annealing blend path is NOT covered by any test above.
+# NOTE: annealing blend graph structure
 #
-# base_quantizer.py line 111 (`result = quantized`) unconditionally overrides
-# the blend computed on line 105, so test_ste_off_annealing_alpha_zero and
-# test_ste_annealing_alpha_half both exercise the fully-quantized STE path.
-# They pass because STE local slope == pass-through slope == 1.
-#
-# Once line 111 is removed, two graph-structure checks become meaningful:
-#   • alpha=0  → graph must NOT contain FixedPointQuantFnTestingThingsBackward
-#   • alpha=0.5 → graph must contain AddBackward (the blend sum has two inputs)
+# With the blend active, the alpha=0 and alpha=0.5 graphs both contain
+# FixedPointQuantFnTestingThingsBackward — even at alpha=0, the blend still
+# computes `0 * quantized(w)` so the STE node is reachable (gradient through
+# it is exactly 0).  The distinguishing mark is the AddBackward node that
+# represents the blend sum; it is absent in the alpha=1 (pure quantized) graph.
 # ---------------------------------------------------------------------------
 
 

@@ -99,7 +99,6 @@ class BaseQuantizer(nn.Module, ABC):
         quantized = self._quantize(x, params)
         scale, zero_point, bit_width = self._get_metadata(params, x)
 
-        # HIDE ME
         alpha_before = self.annealing_alpha.item()
         if alpha_before < 1.0:
             result = (1 - self.annealing_alpha) * x + self.annealing_alpha * quantized
@@ -108,8 +107,6 @@ class BaseQuantizer(nn.Module, ABC):
                 self.annealing_alpha.data.fill_(new_alpha)
         else:
             result = quantized
-        result = quantized
-        # result = MyHideClass6000.apply(...)
 
         # 4. Diagnostics (runs only when diagnostics_dir is set; never in ONNX export)
         if not is_exporting and self.quantizer_manager.diagnostics_dir is not None:
