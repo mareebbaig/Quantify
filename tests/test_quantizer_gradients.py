@@ -37,12 +37,23 @@ EXPECTED_B_GRAD = -6.0
 EXPECTED_Y_HAT = 7.0
 TOL = 1e-4
 
+# Two-layer formula: h = q1(w_1)*x + b_1 ; y_hat = h*q2(w_2) + b_2
+# w_1=2, b_1=1, x=3, w_2=2, b_2=0, y=20
+# h=7, y_hat=14, L=36, dL/dy_hat=-12
+# dL/dw_2 = -12 * h   = -84   dL/db_2 = -12
+# dL/dh   = -12 * 2   = -24   dL/dw_1 = -24 * x = -72   dL/db_1 = -24
+TWO_LAYER_W1_GRAD = -72.0
+TWO_LAYER_B1_GRAD = -24.0
+TWO_LAYER_W2_GRAD = -84.0
+TWO_LAYER_B2_GRAD = -12.0
+TWO_LAYER_Y_HAT = 14.0
+
 def print_graph(fn, depth=0, seen=None, input_idx=None):
     if seen is None:
         seen = set()
     if fn is None:
         return
-    prefix = "  " * depth
+    prefix = f"{depth:2d}: {'  ' * depth}"
     label = type(fn).__name__
     if input_idx is not None:
         label = f"[input {input_idx}] {label}"
@@ -250,3 +261,138 @@ def test_ste_annealing_alpha_half():
         f"only passes through half of the true straight-through slope."
     )
     assert torch.isclose(b.grad, torch.tensor(EXPECTED_B_GRAD), atol=TOL)
+
+
+# ---------------------------------------------------------------------------
+# Two-layer disconnection tests
+#
+# These verify that a quantizer in layer 2 cannot sever the gradient path
+# back to layer 1's weights (graph disconnection).  A disconnected graph
+# would produce w_1.grad == None or w_1.grad ≈ 0.
+#
+# Formula:  h = q1(w_1) * x + b_1
+#           y_hat = h * q2(w_2) + b_2
+#           L = (y_hat - y) ** 2
+# ---------------------------------------------------------------------------
+
+def test_two_layer_no_quantizer():
+    """Baseline with no quantizers: confirms the two-layer math before
+    trusting it to judge quantizer-induced disconnection."""
+    w_1 = torch.tensor(2.0, requires_grad=True)
+    b_1 = torch.tensor(1.0, requires_grad=True)
+    w_2 = torch.tensor(2.0, requires_grad=True)
+    b_2 = torch.tensor(0.0, requires_grad=True)
+    x   = torch.tensor(3.0)
+    y   = torch.tensor(20.0)
+
+    h     = w_1 * x + b_1
+    y_hat = h * w_2 + b_2
+    assert torch.isclose(y_hat, torch.tensor(TWO_LAYER_Y_HAT), atol=TOL)
+
+    loss = (y_hat - y) ** 2
+    loss.backward()
+
+    print("PRINT GRAPH (two-layer baseline, no quantizer)")
+    print_graph(loss.grad_fn)
+
+    assert torch.isclose(w_1.grad, torch.tensor(TWO_LAYER_W1_GRAD), atol=TOL)
+    assert torch.isclose(b_1.grad, torch.tensor(TWO_LAYER_B1_GRAD), atol=TOL)
+    assert torch.isclose(w_2.grad, torch.tensor(TWO_LAYER_W2_GRAD), atol=TOL)
+    assert torch.isclose(b_2.grad, torch.tensor(TWO_LAYER_B2_GRAD), atol=TOL)
+
+
+def test_two_layer_ste_on():
+    """annealing_alpha=1 (fully quantized): both q1 and q2 are active.
+    Gradients must flow from y_hat all the way back through q2 and q1 to
+    both w_1 and w_2 via the STE.
+
+    A disconnection bug in q2 would leave w_1.grad as None or 0,
+    because no gradient path reaches layer 1."""
+    q1 = _make_calibrated_quantizer()
+    q2 = _make_calibrated_quantizer()
+    q1.quantizer_manager.enable_quantization()  # sets alpha=1 on both q1 and q2
+
+    w_1 = torch.tensor(2.0, requires_grad=True)
+    b_1 = torch.tensor(1.0, requires_grad=True)
+    w_2 = torch.tensor(2.0, requires_grad=True)
+    b_2 = torch.tensor(0.0, requires_grad=True)
+    x   = torch.tensor(3.0)
+    y   = torch.tensor(20.0)
+
+    qw_1, *_ = q1(w_1)
+    h         = qw_1 * x + b_1
+    qw_2, *_ = q2(w_2)
+    y_hat     = h * qw_2 + b_2
+    assert torch.isclose(y_hat, torch.tensor(TWO_LAYER_Y_HAT), atol=TOL)
+
+    loss = (y_hat - y) ** 2
+    loss.backward()
+
+    print(f"w_1.grad={w_1.grad}  b_1.grad={b_1.grad}")
+    print(f"w_2.grad={w_2.grad}  b_2.grad={b_2.grad}")
+    print("PRINT GRAPH (two-layer, both quantizers ON)")
+    print_graph(loss.grad_fn)
+
+    assert w_1.grad is not None, (
+        "w_1.grad is None -- q2 disconnected the graph between layer 2 and layer 1"
+    )
+    assert torch.isclose(w_1.grad, torch.tensor(TWO_LAYER_W1_GRAD), atol=TOL), (
+        f"w_1.grad={w_1.grad.item()}, expected {TWO_LAYER_W1_GRAD}"
+    )
+    assert torch.isclose(b_1.grad, torch.tensor(TWO_LAYER_B1_GRAD), atol=TOL), (
+        f"b_1.grad={b_1.grad.item()}, expected {TWO_LAYER_B1_GRAD}"
+    )
+    assert torch.isclose(w_2.grad, torch.tensor(TWO_LAYER_W2_GRAD), atol=TOL), (
+        f"w_2.grad={w_2.grad.item()}, expected {TWO_LAYER_W2_GRAD}"
+    )
+    assert torch.isclose(b_2.grad, torch.tensor(TWO_LAYER_B2_GRAD), atol=TOL), (
+        f"b_2.grad={b_2.grad.item()}, expected {TWO_LAYER_B2_GRAD}"
+    )
+
+
+def test_two_layer_ste_annealing_alpha_half():
+    """annealing_alpha=0.5 in both quantizers: the blended slope for each
+    STE branch is 0.5*1 + 0.5*1 = 1.0, so gradients must be identical to
+    the no-quantizer baseline.
+
+    A value of w_1.grad ≈ -36 (half of -72) means one quantizer's
+    quantized branch contributes zero local gradient (no STE)."""
+    q1 = _make_calibrated_quantizer()
+    q2 = _make_calibrated_quantizer()
+    for q in (q1, q2):
+        q.annealing_alpha.data.fill_(0.5)
+        q.annealing_alpha_step = 0.0
+
+    w_1 = torch.tensor(2.0, requires_grad=True)
+    b_1 = torch.tensor(1.0, requires_grad=True)
+    w_2 = torch.tensor(2.0, requires_grad=True)
+    b_2 = torch.tensor(0.0, requires_grad=True)
+    x   = torch.tensor(3.0)
+    y   = torch.tensor(20.0)
+
+    qw_1, *_ = q1(w_1)
+    h         = qw_1 * x + b_1
+    qw_2, *_ = q2(w_2)
+    y_hat     = h * qw_2 + b_2
+    assert torch.isclose(y_hat, torch.tensor(TWO_LAYER_Y_HAT), atol=TOL)
+
+    loss = (y_hat - y) ** 2
+    loss.backward()
+
+    print(f"w_1.grad={w_1.grad}  b_1.grad={b_1.grad}")
+    print(f"w_2.grad={w_2.grad}  b_2.grad={b_2.grad}")
+    print("PRINT GRAPH (two-layer, alpha=0.5)")
+    print_graph(loss.grad_fn)
+
+    assert w_1.grad is not None, (
+        "w_1.grad is None -- graph is disconnected at alpha=0.5"
+    )
+    assert torch.isclose(w_1.grad, torch.tensor(TWO_LAYER_W1_GRAD), atol=TOL), (
+        f"ANNEALING two-layer: w_1.grad={w_1.grad.item()}, expected {TWO_LAYER_W1_GRAD} "
+        f"-- a value around -36.0 means a quantized branch has zero local gradient"
+    )
+    assert torch.isclose(b_1.grad, torch.tensor(TWO_LAYER_B1_GRAD), atol=TOL)
+    assert torch.isclose(w_2.grad, torch.tensor(TWO_LAYER_W2_GRAD), atol=TOL), (
+        f"ANNEALING two-layer: w_2.grad={w_2.grad.item()}, expected {TWO_LAYER_W2_GRAD}"
+    )
+    assert torch.isclose(b_2.grad, torch.tensor(TWO_LAYER_B2_GRAD), atol=TOL)
