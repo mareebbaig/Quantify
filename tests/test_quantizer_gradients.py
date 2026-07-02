@@ -50,6 +50,39 @@ TWO_LAYER_W2_GRAD = -84.0
 TWO_LAYER_B2_GRAD = -12.0
 TWO_LAYER_Y_HAT = 14.0
 
+# Rounded quantization tests
+# Calibration data [0,1,2,3,4] gives lsb=0, step=1 (unsigned 8-bit).
+# w=2.75 is not on the grid, so q(w)=3.0 (rounds up).
+# x=4.0, b=0.5, y=14.0
+#
+# alpha=0  → result = w = 2.75
+#   y_hat = 2.75*4 + 0.5 = 11.5    error = -2.5    dL/dy_hat = -5.0
+#   dL/dw = -5.0 * 4 * 1 = -20.0   dL/db = -5.0
+#
+# alpha=0.5 → result = blend = 0.5*2.75 + 0.5*3.0 = 2.875
+#   y_hat = 2.875*4 + 0.5 = 12.0   error = -2.0    dL/dy_hat = -4.0
+#   dL/dw = -4.0 * 4 * 1 = -16.0   dL/db = -4.0    (AnnealingBlendFn slope=1)
+#
+# alpha=1  → result = q(w) = 3.0
+#   y_hat = 3.0*4 + 0.5 = 12.5     error = -1.5    dL/dy_hat = -3.0
+#   dL/dw = -3.0 * 4 * 1 = -12.0   dL/db = -3.0    (STE slope=1)
+ROUNDED_W = 2.75        # not on the step=1 grid
+ROUNDED_Q_W = 3.0       # q(ROUNDED_W) — rounds up by 0.25
+ROUNDED_X = 4.0
+ROUNDED_B = 0.5
+ROUNDED_Y = 14.0
+
+ROUNDED_Y_HAT_ALPHA_ZERO = 11.5   # result = w
+ROUNDED_Y_HAT_ALPHA_HALF = 12.0   # result = blend
+ROUNDED_Y_HAT_ALPHA_ONE  = 12.5   # result = q(w)
+
+ROUNDED_W_GRAD_ALPHA_ZERO = -20.0
+ROUNDED_B_GRAD_ALPHA_ZERO = -5.0
+ROUNDED_W_GRAD_ALPHA_HALF = -16.0
+ROUNDED_B_GRAD_ALPHA_HALF = -4.0
+ROUNDED_W_GRAD_ALPHA_ONE  = -12.0
+ROUNDED_B_GRAD_ALPHA_ONE  = -3.0
+
 def print_graph(fn, depth=0, seen=None, input_idx=None):
     if seen is None:
         seen = set()
@@ -484,3 +517,138 @@ def test_quant_linear_two_layer_gradient_flow():
     assert layer1.weight.grad.abs().sum() > 0, "layer1.weight.grad is all zeros"
     assert layer2.weight.grad is not None, "layer2.weight.grad is None"
     assert layer2.weight.grad.abs().sum() > 0, "layer2.weight.grad is all zeros"
+
+
+# ---------------------------------------------------------------------------
+# Rounded quantization gradient tests
+#
+# The exact-grid tests above use w=2.0 which sits exactly on the step=1 grid
+# produced by calibrating on [0,1,2,3,4], so q(w)=w and the quantizer never
+# actually rounds.  These tests use w=2.75 where q(w)=3.0 (rounds up by 0.25).
+#
+# The rounding changes y_hat and therefore dL/dy_hat for each alpha state,
+# giving three different correct gradient values instead of a single -18.0.
+# The STE and AnnealingBlendFn must still each contribute local slope=1.
+# ---------------------------------------------------------------------------
+
+def test_rounded_baseline_no_quantizer():
+    """No quantizer, w=2.75: sanity-check the rounded-test math.
+    y_hat = 2.75*4 + 0.5 = 11.5, not 12.5 (the alpha=1 value), showing that
+    rounding shifts the loss and therefore the gradient."""
+    w = torch.tensor(ROUNDED_W, requires_grad=True)
+    b = torch.tensor(ROUNDED_B, requires_grad=True)
+    x = torch.tensor(ROUNDED_X)
+    y = torch.tensor(ROUNDED_Y)
+
+    y_hat = w * x + b
+    assert torch.isclose(y_hat, torch.tensor(ROUNDED_Y_HAT_ALPHA_ZERO), atol=TOL)
+
+    loss = (y_hat - y) ** 2
+    loss.backward()
+
+    print("PRINT GRAPH (rounded baseline, no quantizer)")
+    print_graph(loss.grad_fn)
+
+    assert torch.isclose(w.grad, torch.tensor(ROUNDED_W_GRAD_ALPHA_ZERO), atol=TOL)
+    assert torch.isclose(b.grad, torch.tensor(ROUNDED_B_GRAD_ALPHA_ZERO), atol=TOL)
+
+
+def test_rounded_ste_off_alpha_zero():
+    """alpha=0: AnnealingBlendFn returns result=w unchanged.
+    Forward uses the unrounded w=2.75, so y_hat and gradient match the
+    no-quantizer baseline.  The quantizer is present in the graph but
+    contributes zero gradient (multiplied by alpha=0)."""
+    q = _make_calibrated_quantizer()
+    q.quantizer_manager.disable_quantization()
+    assert q.annealing_alpha.item() == 0.0
+
+    w = torch.tensor(ROUNDED_W, requires_grad=True)
+    b = torch.tensor(ROUNDED_B, requires_grad=True)
+    x = torch.tensor(ROUNDED_X)
+    y = torch.tensor(ROUNDED_Y)
+
+    quantized_w, *_ = q(w)
+    y_hat = quantized_w * x + b
+    assert torch.isclose(y_hat, torch.tensor(ROUNDED_Y_HAT_ALPHA_ZERO), atol=TOL), (
+        f"alpha=0 must use unrounded w: expected y_hat={ROUNDED_Y_HAT_ALPHA_ZERO}, got {y_hat.item()}"
+    )
+
+    loss = (y_hat - y) ** 2
+    loss.backward()
+
+    print(f"quantized_w (result): {quantized_w.item()}")
+    print("PRINT GRAPH (rounded, alpha=0)")
+    print_graph(loss.grad_fn)
+
+    assert torch.isclose(w.grad, torch.tensor(ROUNDED_W_GRAD_ALPHA_ZERO), atol=TOL), (
+        f"alpha=0: expected w.grad={ROUNDED_W_GRAD_ALPHA_ZERO}, got {w.grad.item()}"
+    )
+    assert torch.isclose(b.grad, torch.tensor(ROUNDED_B_GRAD_ALPHA_ZERO), atol=TOL)
+
+
+def test_rounded_ste_on_alpha_one():
+    """alpha=1: quantizer fully active, result=q(w)=3.0 (rounded up from 2.75).
+    y_hat shifts to 12.5 and the gradient changes to -12.0 — different from the
+    baseline -20.0 because rounding changes the loss, not the STE slope."""
+    q = _make_calibrated_quantizer()
+    q.quantizer_manager.enable_quantization()
+    assert q.annealing_alpha.item() == 1.0
+
+    w = torch.tensor(ROUNDED_W, requires_grad=True)
+    b = torch.tensor(ROUNDED_B, requires_grad=True)
+    x = torch.tensor(ROUNDED_X)
+    y = torch.tensor(ROUNDED_Y)
+
+    quantized_w, *_ = q(w)
+    assert torch.isclose(quantized_w, torch.tensor(ROUNDED_Q_W), atol=TOL), (
+        f"expected q(w)={ROUNDED_Q_W}, got {quantized_w.item()}"
+    )
+    y_hat = quantized_w * x + b
+    assert torch.isclose(y_hat, torch.tensor(ROUNDED_Y_HAT_ALPHA_ONE), atol=TOL), (
+        f"alpha=1 must use q(w): expected y_hat={ROUNDED_Y_HAT_ALPHA_ONE}, got {y_hat.item()}"
+    )
+
+    loss = (y_hat - y) ** 2
+    loss.backward()
+
+    print(f"quantized_w: {quantized_w.item()}")
+    print("PRINT GRAPH (rounded, alpha=1)")
+    print_graph(loss.grad_fn)
+
+    assert torch.isclose(w.grad, torch.tensor(ROUNDED_W_GRAD_ALPHA_ONE), atol=TOL), (
+        f"alpha=1 (STE): expected w.grad={ROUNDED_W_GRAD_ALPHA_ONE}, got {w.grad.item()}"
+    )
+    assert torch.isclose(b.grad, torch.tensor(ROUNDED_B_GRAD_ALPHA_ONE), atol=TOL)
+
+
+def test_rounded_ste_annealing_alpha_half():
+    """alpha=0.5: AnnealingBlendFn returns 0.5*w + 0.5*q(w) = 2.875.
+    y_hat = 12.0 (between the alpha=0 value of 11.5 and alpha=1 value of 12.5),
+    and dL/dw = -16.0.  AnnealingBlendFn slope=1 so the gradient equals
+    dL/dy_hat * x = -4.0 * 4 = -16.0, not the blend of -20 and -12."""
+    q = _make_calibrated_quantizer()
+    q.annealing_alpha.data.fill_(0.5)
+    q.annealing_alpha_step = 0.0
+
+    w = torch.tensor(ROUNDED_W, requires_grad=True)
+    b = torch.tensor(ROUNDED_B, requires_grad=True)
+    x = torch.tensor(ROUNDED_X)
+    y = torch.tensor(ROUNDED_Y)
+
+    quantized_w, *_ = q(w)
+    y_hat = quantized_w * x + b
+    assert torch.isclose(y_hat, torch.tensor(ROUNDED_Y_HAT_ALPHA_HALF), atol=TOL), (
+        f"alpha=0.5 blend must give y_hat={ROUNDED_Y_HAT_ALPHA_HALF}, got {y_hat.item()}"
+    )
+
+    loss = (y_hat - y) ** 2
+    loss.backward()
+
+    print(f"quantized_w (blend result): {quantized_w.item()}")
+    print("PRINT GRAPH (rounded, alpha=0.5)")
+    print_graph(loss.grad_fn)
+
+    assert torch.isclose(w.grad, torch.tensor(ROUNDED_W_GRAD_ALPHA_HALF), atol=TOL), (
+        f"alpha=0.5: expected w.grad={ROUNDED_W_GRAD_ALPHA_HALF}, got {w.grad.item()}"
+    )
+    assert torch.isclose(b.grad, torch.tensor(ROUNDED_B_GRAD_ALPHA_HALF), atol=TOL)
