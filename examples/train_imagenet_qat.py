@@ -168,10 +168,6 @@ def parse_args() -> argparse.Namespace:
     t.add_argument("--lr", type=float, default=1e-4)
     t.add_argument("--weight-decay", type=float, default=1e-4)
     t.add_argument(
-        "--label-smoothing", type=float, default=0.1,
-        help="Label smoothing for CrossEntropyLoss (0 = off)",
-    )
-    t.add_argument(
         "--mixed-precision",
         action="store_true",
         default=True,
@@ -186,16 +182,40 @@ def parse_args() -> argparse.Namespace:
         help="DataLoader prefetch factor (batches queued per worker ahead of GPU)",
     )
     t.add_argument(
-        "--mixup-alpha",
+        "--mixup",
         type=float,
-        default=0.2,
-        help="MixUp Beta distribution alpha. Set 0 to disable.",
+        default=0.1,
+        help="MixUp Beta distribution alpha (0 = off)",
     )
     t.add_argument(
-        "--cutmix-alpha",
+        "--cutmix",
         type=float,
         default=1.0,
-        help="CutMix Beta distribution alpha. Set 0 to disable.",
+        help="CutMix Beta distribution alpha (0 = off)",
+    )
+    t.add_argument(
+        "--mixup-prob",
+        type=float,
+        default=1.0,
+        help="Probability of applying mixup or cutmix per batch",
+    )
+    t.add_argument(
+        "--mixup-switch-prob",
+        type=float,
+        default=0.5,
+        help="Probability of switching to cutmix when both mixup and cutmix are enabled",
+    )
+    t.add_argument(
+        "--smoothing",
+        type=float,
+        default=0.1,
+        help="Label smoothing: via Mixup when active, else LabelSmoothingCE (0 = off)",
+    )
+    t.add_argument(
+        "--reprob",
+        type=float,
+        default=0.25,
+        help="Random Erasing probability (0 = off)",
     )
     t.add_argument(
         "--ema-decay",
@@ -603,7 +623,7 @@ def main() -> None:
             model=model,
             optimizer=optimizer,
             train_loader=train_loader,
-            loss_fn=nn.CrossEntropyLoss(label_smoothing=0.1),
+            loss_fn=nn.CrossEntropyLoss(),
             device="auto",
             calibration_steps=args.find_lr_calib_steps,
             sweep_start_lr=args.find_lr_sweep_start,
@@ -659,8 +679,13 @@ def main() -> None:
         reduce_lr_factor=0.5,
         reduce_lr_min_lr=1e-8,
 
-        mixup_alpha=args.mixup_alpha,
-        cutmix_alpha=args.cutmix_alpha,
+        mixup=args.mixup,
+        cutmix=args.cutmix,
+        mixup_prob=args.mixup_prob,
+        mixup_switch_prob=args.mixup_switch_prob,
+        smoothing=args.smoothing,
+        reprob=args.reprob,
+        num_classes=args.num_classes,
         ema_decay=args.ema_decay,
     )
 
@@ -670,7 +695,7 @@ def main() -> None:
         optimizer=optimizer,
         train_loader=train_loader,
         val_loader=val_loader,
-        loss_fn=nn.CrossEntropyLoss(label_smoothing=args.label_smoothing),
+        loss_fn=nn.CrossEntropyLoss(),
         scheduler=scheduler,
         onnx_dummy_input=torch.zeros(1, 3, 224, 224),
     )

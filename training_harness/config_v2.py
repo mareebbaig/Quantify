@@ -155,13 +155,28 @@ class TrainerConfigV2:
     reduce_lr_threshold: float = 1e-4
     """Minimum change in monitored metric to count as improvement."""
 
-    # ---- MixUp / CutMix ---------------------------------------------------
-    mixup_alpha: float = 0.0
-    """Beta distribution alpha for MixUp. Set > 0 to enable (typical: 0.2).
-    When both mixup_alpha and cutmix_alpha are > 0, each batch randomly uses one."""
+    # ---- MixUp / CutMix / Random Erasing ---------------------------------
+    mixup: float = 0.0
+    """Beta distribution alpha for MixUp. Set > 0 to enable (typical: 0.1)."""
 
-    cutmix_alpha: float = 0.0
+    cutmix: float = 0.0
     """Beta distribution alpha for CutMix. Set > 0 to enable (typical: 1.0)."""
+
+    mixup_prob: float = 1.0
+    """Probability of applying mixup or cutmix per batch."""
+
+    mixup_switch_prob: float = 0.5
+    """Probability of switching to CutMix when both mixup and cutmix are enabled."""
+
+    smoothing: float = 0.1
+    """Label smoothing. Applied via timm Mixup when mixup/cutmix are enabled;
+    via LabelSmoothingCrossEntropy otherwise. Set 0 to disable."""
+
+    reprob: float = 0.0
+    """Random Erasing probability. Set > 0 to enable (typical: 0.25)."""
+
+    num_classes: int = 1000
+    """Number of output classes, used by timm Mixup to build soft-target vectors."""
 
     # ---- EMA --------------------------------------------------------------
     ema_decay: float = 0.0

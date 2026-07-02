@@ -137,14 +137,10 @@ def parse_args() -> argparse.Namespace:
 
     # ---- Training ----------------------------------------------------------
     t = p.add_argument_group("training")
-    t.add_argument("--epochs", type=int, default=90)
+    t.add_argument("--epochs", type=int, default=290)
     t.add_argument("--batch-size", type=int, default=1024)
     t.add_argument("--lr", type=float, default=1e-4)
     t.add_argument("--weight-decay", type=float, default=1e-4)
-    t.add_argument(
-        "--label-smoothing", type=float, default=0.1,
-        help="Label smoothing for CrossEntropyLoss (0 = off)",
-    )
     t.add_argument(
         "--mixed-precision",
         action="store_true",
@@ -153,10 +149,18 @@ def parse_args() -> argparse.Namespace:
     )
     t.add_argument("--no-mixed-precision", dest="mixed_precision", action="store_false")
     t.add_argument("--prefetch-factor", type=int, default=3)
-    t.add_argument("--mixup-alpha", type=float, default=0.2,
+    t.add_argument("--mixup", type=float, default=0.1,
                    help="MixUp Beta alpha (0 = off)")
-    t.add_argument("--cutmix-alpha", type=float, default=1.0,
+    t.add_argument("--cutmix", type=float, default=1.0,
                    help="CutMix Beta alpha (0 = off)")
+    t.add_argument("--mixup-prob", type=float, default=1.0,
+                   help="Probability of applying mixup or cutmix per batch")
+    t.add_argument("--mixup-switch-prob", type=float, default=0.5,
+                   help="Probability of switching to cutmix when both are enabled")
+    t.add_argument("--smoothing", type=float, default=0.1,
+                   help="Label smoothing: via Mixup when active, else LabelSmoothingCE (0 = off)")
+    t.add_argument("--reprob", type=float, default=0.25,
+                   help="Random Erasing probability (0 = off)")
     t.add_argument("--ema-decay", type=float, default=0.9999,
                    help="EMA shadow model decay (0 = off)")
     t.add_argument(
@@ -321,7 +325,7 @@ def main() -> None:
     print(f"  Model       : {args.model}  (float, no quantization)")
     print(f"  Pretrained  : {args.pretrained}")
     print(f"  AMP         : {args.mixed_precision}")
-    print(f"  MixUp α     : {args.mixup_alpha}  CutMix α: {args.cutmix_alpha}")
+    print(f"  Mixup α     : {args.mixup}  CutMix α: {args.cutmix}  reprob: {args.reprob}  smoothing: {args.smoothing}")
     print(f"  EMA decay   : {args.ema_decay}")
     if args.data_dir:
         print(f"  Data        : DALI ({args.data_dir})")
@@ -381,8 +385,13 @@ def main() -> None:
         reduce_lr_factor=args.reduce_lr_factor,
         reduce_lr_min_lr=args.reduce_lr_min_lr,
 
-        mixup_alpha=args.mixup_alpha,
-        cutmix_alpha=args.cutmix_alpha,
+        mixup=args.mixup,
+        cutmix=args.cutmix,
+        mixup_prob=args.mixup_prob,
+        mixup_switch_prob=args.mixup_switch_prob,
+        smoothing=args.smoothing,
+        reprob=args.reprob,
+        num_classes=args.num_classes,
         ema_decay=args.ema_decay,
     )
 
@@ -392,7 +401,7 @@ def main() -> None:
         optimizer=optimizer,
         train_loader=train_loader,
         val_loader=val_loader,
-        loss_fn=nn.CrossEntropyLoss(label_smoothing=args.label_smoothing),
+        loss_fn=nn.CrossEntropyLoss(),
         scheduler=None,
         onnx_dummy_input=torch.zeros(1, 3, 224, 224),
     )

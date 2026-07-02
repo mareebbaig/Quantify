@@ -33,7 +33,6 @@ from .console import TrainingConsole
 from .ema import EMAModel
 from .logger import ExperimentLogger
 from .metrics import MetricsTracker
-from .mixup import apply_mixup_cutmix
 from .plotting import TrainingPlotter
 from .schedulers import collect_scale_factors, freeze_bn, _set_quant_enabled
 from .engine_utils import EarlyStopping, EpochTimer, LossPlateauDetector, log_hardware_info, set_seed
@@ -90,6 +89,46 @@ class QATTrainerV2:
         self.accuracy_fn = accuracy_fn or _default_accuracy
 
         self.device = torch.device(config.resolve_device())
+
+        # ── Timm Mixup / CutMix ────────────────────────────────────────────
+        # DALILoader already squeezes labels to [B] long, so no squeeze needed.
+        self._mixup_fn = None
+        if config.mixup > 0 or config.cutmix > 0:
+            from timm.data import Mixup as TimmMixup
+            self._mixup_fn = TimmMixup(
+                mixup_alpha=config.mixup,
+                cutmix_alpha=config.cutmix,
+                prob=config.mixup_prob,
+                switch_prob=config.mixup_switch_prob,
+                label_smoothing=config.smoothing,
+                num_classes=config.num_classes,
+            )
+
+        # ── Random Erasing ──────────────────────────────────────────────────
+        # Applied after mixup on GPU-resident, already-normalised images.
+        self._erasing_fn = None
+        if config.reprob > 0:
+            from timm.data.random_erasing import RandomErasing
+            self._erasing_fn = RandomErasing(
+                probability=config.reprob,
+                mode='pixel',
+                device='cuda',
+            )
+
+        # ── Training loss ───────────────────────────────────────────────────
+        # When mixup is active the targets from TimmMixup are soft [B, C]
+        # vectors, so we need SoftTargetCrossEntropy.  When only smoothing is
+        # requested, fall back to LabelSmoothingCrossEntropy.  Otherwise use
+        # the loss_fn passed from outside (plain CE) — this is the disabled
+        # path and must behave identically to the pre-augmentation code.
+        if self._mixup_fn is not None:
+            from timm.loss import SoftTargetCrossEntropy
+            self._train_loss_fn = SoftTargetCrossEntropy()
+        elif config.smoothing > 0:
+            from timm.loss import LabelSmoothingCrossEntropy
+            self._train_loss_fn = LabelSmoothingCrossEntropy(smoothing=config.smoothing)
+        else:
+            self._train_loss_fn = loss_fn or nn.CrossEntropyLoss()
 
         if config.mixed_precision:
             warnings.warn(
@@ -250,6 +289,13 @@ class QATTrainerV2:
         print(f"  Epochs     : {self.config.epochs}")
         print(f"  Warmup     : {self.config.qat.float_warmup_epochs} epochs")
         print(f"  Gap/Anneal : {self.config.qat.quantization_start_gap} / {self.config.qat.annealing_steps}")
+        if self._mixup_fn is not None:
+            print(f"  Mixup      : α={self.config.mixup}  CutMix α={self.config.cutmix}"
+                  f"  prob={self.config.mixup_prob}  switch={self.config.mixup_switch_prob}"
+                  f"  smoothing={self.config.smoothing}")
+            print(f"               train_acc is approximate (pre-mixup hard labels)")
+        if self._erasing_fn is not None:
+            print(f"  RandErase  : prob={self.config.reprob}  mode=pixel")
         print(f"  ── Output paths ──────────────────────────────────────")
         print(f"  Logs       : {abs_logs}")
         print(f"  Checkpoints: {abs_ckpt}")
@@ -479,26 +525,22 @@ class QATTrainerV2:
             inputs = inputs.to(self.device)
             targets = targets.to(self.device)
 
-            # MixUp / CutMix — training only
-            targets_a = targets_b = targets
-            lam = 1.0
-            if is_train and (self.config.mixup_alpha > 0 or self.config.cutmix_alpha > 0):
-                inputs, targets_a, targets_b, lam = apply_mixup_cutmix(
-                    inputs, targets,
-                    mixup_alpha=self.config.mixup_alpha,
-                    cutmix_alpha=self.config.cutmix_alpha,
-                )
+            # Keep hard integer labels for accuracy; mixup will overwrite targets
+            hard_targets = targets
 
+            # MixUp / CutMix — training only; produces soft [B, num_classes] targets
+            if is_train and self._mixup_fn is not None:
+                inputs, targets = self._mixup_fn(inputs, hard_targets)
+
+            # Random Erasing — training only, after mixup, on normalised GPU images
+            if is_train and self._erasing_fn is not None:
+                inputs = self._erasing_fn(inputs)
+
+            loss_fn = self._train_loss_fn if is_train else self.loss_fn
             with torch.set_grad_enabled(is_train):
                 with torch.autocast(device_type=self.device.type, enabled=self._use_amp):
                     outputs = self.model(inputs)
-                    if lam < 1.0:
-                        loss = (
-                            lam * self.loss_fn(outputs, targets_a)
-                            + (1.0 - lam) * self.loss_fn(outputs, targets_b)
-                        )
-                    else:
-                        loss = self.loss_fn(outputs, targets)
+                    loss = loss_fn(outputs, targets)
 
             if is_train:
                 self.optimizer.zero_grad(set_to_none=True)
@@ -534,7 +576,10 @@ class QATTrainerV2:
 
             batch_size = inputs.size(0)
             self.tracker.update_step(f"{phase}_loss", loss.item(), phase=phase, n=batch_size)
-            acc = self.accuracy_fn(outputs.detach(), targets)
+            # Accuracy is always against hard integer labels.  When mixup is
+            # active during training, hard_targets are the pre-mix class indices
+            # (approximate, since the model saw a blended image).
+            acc = self.accuracy_fn(outputs.detach(), hard_targets)
             self.tracker.update_step(f"{phase}_acc", acc, phase=phase, n=batch_size)
 
             # Running averages in the progress bar postfix
