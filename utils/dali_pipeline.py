@@ -27,7 +27,8 @@ from nvidia.dali.auto_aug import rand_augment
 # ---------------------------------------------------------------------------
 
 @pipeline_def(enable_conditionals=True)  # required for auto_aug
-def _train_pipeline(file_root: str, num_shards: int, shard_id: int, crop: int = 224):
+def _train_pipeline(file_root: str, num_shards: int, shard_id: int,
+                    crop: int = 224, randaugment_n: int = 2, randaugment_m: int = 7):
     jpegs, labels = fn.readers.file(
         file_root=file_root,
         random_shuffle=True,
@@ -47,7 +48,7 @@ def _train_pipeline(file_root: str, num_shards: int, shard_id: int, crop: int = 
         images, device="gpu", size=[crop, crop],
         interp_type=types.INTERP_CUBIC,
     )
-    images = rand_augment.rand_augment(images, n=2, m=9)
+    images = rand_augment.rand_augment(images, n=randaugment_n, m=randaugment_m)
     images = fn.crop_mirror_normalize(
         images,
         device="gpu",
@@ -138,6 +139,8 @@ def build_dali_loaders(
     device_id: int = 0,
     crop: int = 224,
     resize_shorter: int = 256,
+    randaugment_n: int = 2,
+    randaugment_m: int = 7,
 ) -> tuple[DALILoader, DALILoader]:
     """
     Build DALI train and val loaders from an ImageFolder directory.
@@ -150,6 +153,8 @@ def build_dali_loaders(
         crop:            Output spatial size (default 224).
         resize_shorter:  Val resize-shorter target before center-crop (default 256,
                          matching the standard torchvision IMAGENET1K recipe).
+        randaugment_n:   Number of RandAugment transforms applied per image (default 2).
+        randaugment_m:   RandAugment magnitude (default 7).
 
     Returns:
         (train_loader, val_loader)
@@ -163,6 +168,8 @@ def build_dali_loaders(
         num_shards=1,
         shard_id=0,
         crop=crop,
+        randaugment_n=randaugment_n,
+        randaugment_m=randaugment_m,
         batch_size=batch_size,
         num_threads=num_threads,
         device_id=device_id,

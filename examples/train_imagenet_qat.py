@@ -130,6 +130,10 @@ def parse_args() -> argparse.Namespace:
         help="DALI CPU preprocessing threads (used when --data-dir is set). "
              "DALI offloads most work to GPU so 4 is usually enough.",
     )
+    d.add_argument("--randaugment-n", type=int, default=2,
+                   help="Number of RandAugment transforms per image")
+    d.add_argument("--randaugment-m", type=int, default=7,
+                   help="RandAugment magnitude")
 
     # ---- Quantization ------------------------------------------------------
     q = p.add_argument_group("quantization")
@@ -556,6 +560,8 @@ def _build_dali_loaders(args):
         data_dir=args.data_dir,
         batch_size=args.batch_size,
         num_threads=args.dali_threads,
+        randaugment_n=args.randaugment_n,
+        randaugment_m=args.randaugment_m,
     )
     print(f"  train: {len(train_loader):,} batches   val: {len(val_loader):,} batches")
     return train_loader, val_loader

@@ -134,6 +134,10 @@ def parse_args() -> argparse.Namespace:
     d.add_argument("--hf-dataset", type=str, default="ILSVRC/imagenet-1k")
     d.add_argument("--num-workers", type=int, default=20)
     d.add_argument("--dali-threads", type=int, default=4)
+    d.add_argument("--randaugment-n", type=int, default=2,
+                   help="Number of RandAugment transforms per image")
+    d.add_argument("--randaugment-m", type=int, default=7,
+                   help="RandAugment magnitude")
 
     # ---- Training ----------------------------------------------------------
     t = p.add_argument_group("training")
@@ -302,6 +306,8 @@ def _build_dali_loaders(args):
         data_dir=args.data_dir,
         batch_size=args.batch_size,
         num_threads=args.dali_threads,
+        randaugment_n=args.randaugment_n,
+        randaugment_m=args.randaugment_m,
     )
     print(f"  train: {len(train_loader):,} batches   val: {len(val_loader):,} batches")
     return train_loader, val_loader
