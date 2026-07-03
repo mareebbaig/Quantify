@@ -15,7 +15,9 @@ Use scripts/extract_imagenet.py to produce this layout from the HF dataset.
 
 from __future__ import annotations
 
+import functools
 from pathlib import Path
+from typing import Callable
 
 from nvidia import dali
 from nvidia.dali import fn, pipeline_def, types
@@ -96,32 +98,57 @@ class DALILoader:
 
     Yields (images, labels) where both tensors are already on the GPU.
     The trainer's .to(device) calls are harmless no-ops on GPU tensors.
+
+    When DALI encounters a corrupt/unreadable image it raises a critical error
+    that permanently invalidates the pipeline object.  DALILoader handles this
+    by rebuilding the pipeline from the stored factory and ending the current
+    epoch early — the next epoch starts with a fresh, valid pipeline.
     """
 
     def __init__(
         self,
-        pipeline,
+        pipeline_factory: Callable,
         dataset_size: int,
         batch_size: int,
         last_batch_policy: LastBatchPolicy = LastBatchPolicy.DROP,
-        already_built: bool = False,
     ):
-        if not already_built:
-            pipeline.build()
-        self._iter = DALIClassificationIterator(
-            pipeline,
-            reader_name="Reader",
-            last_batch_policy=last_batch_policy,
-        )
+        self._factory = pipeline_factory
         self._dataset_size = dataset_size
         self._batch_size = batch_size
+        self._last_batch_policy = last_batch_policy
+        self._build()
+
+    def _build(self):
+        pipe = self._factory()
+        pipe.build()
+        self._iter = DALIClassificationIterator(
+            pipe,
+            reader_name="Reader",
+            last_batch_policy=self._last_batch_policy,
+        )
 
     def __iter__(self):
-        self._iter.reset()
-        for batch in self._iter:
-            images = batch[0]["data"]
-            labels = batch[0]["label"].squeeze(-1).long()
-            yield images, labels
+        try:
+            self._iter.reset()
+        except Exception:
+            # Pipeline was invalidated by a previous critical error — rebuild.
+            self._build()
+
+        try:
+            for batch in self._iter:
+                images = batch[0]["data"]
+                labels = batch[0]["label"].squeeze(-1).long()
+                yield images, labels
+        except RuntimeError as e:
+            msg = str(e)
+            if "Critical error" in msg or "no longer valid" in msg:
+                print(
+                    f"\n[DALI] Warning: unreadable image encountered mid-epoch; "
+                    f"skipping remaining batches and rebuilding pipeline for next epoch."
+                )
+                self._build()
+            else:
+                raise
 
     def __len__(self) -> int:
         return self._dataset_size // self._batch_size
@@ -163,35 +190,32 @@ def build_dali_loaders(
     train_dir = str(data_dir / "train")
     val_dir   = str(data_dir / "val")
 
-    train_pipe = _train_pipeline(
-        file_root=train_dir,
-        num_shards=1,
-        shard_id=0,
-        crop=crop,
-        randaugment_n=randaugment_n,
-        randaugment_m=randaugment_m,
-        batch_size=batch_size,
-        num_threads=num_threads,
-        device_id=device_id,
+    dali_kwargs = dict(batch_size=batch_size, num_threads=num_threads, device_id=device_id)
+
+    train_factory = functools.partial(
+        _train_pipeline,
+        file_root=train_dir, num_shards=1, shard_id=0,
+        crop=crop, randaugment_n=randaugment_n, randaugment_m=randaugment_m,
+        **dali_kwargs,
     )
-    val_pipe = _val_pipeline(
-        file_root=val_dir,
-        num_shards=1,
-        shard_id=0,
-        crop=crop,
-        resize_shorter=resize_shorter,
-        batch_size=batch_size,
-        num_threads=num_threads,
-        device_id=device_id,
+    val_factory = functools.partial(
+        _val_pipeline,
+        file_root=val_dir, num_shards=1, shard_id=0,
+        crop=crop, resize_shorter=resize_shorter,
+        **dali_kwargs,
     )
 
-    # Build before querying epoch size so DALI can count the files
-    train_pipe.build()
-    val_pipe.build()
-    n_train = train_pipe.epoch_size("Reader")
-    n_val   = val_pipe.epoch_size("Reader")
+    # Build one probe pipeline to query epoch sizes before handing off factories.
+    train_probe = train_factory()
+    train_probe.build()
+    n_train = train_probe.epoch_size("Reader")
+    del train_probe
 
-    train_loader = DALILoader(train_pipe, n_train, batch_size, already_built=True)
-    val_loader   = DALILoader(val_pipe,   n_val,   batch_size, LastBatchPolicy.PARTIAL,
-                              already_built=True)
+    val_probe = val_factory()
+    val_probe.build()
+    n_val = val_probe.epoch_size("Reader")
+    del val_probe
+
+    train_loader = DALILoader(train_factory, n_train, batch_size)
+    val_loader   = DALILoader(val_factory,   n_val,   batch_size, LastBatchPolicy.PARTIAL)
     return train_loader, val_loader
