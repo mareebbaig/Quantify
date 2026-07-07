@@ -248,10 +248,19 @@ class RunStateCollector:
         try:
             from quantizers.manager import QuantizerManager
             mgr = QuantizerManager()
-            total = len(mgr.quantizers)
+            # Brevitas injector re-resolution (e.g. during checkpoint loads)
+            # registers throwaway quantizer objects that are never wired into
+            # the model; they keep inference_sequence_id == -1 because no
+            # forward pass ever reaches them (see manager.py). Count only
+            # reached quantizers once at least one forward pass has happened.
+            quantizers = [
+                q for q in mgr.quantizers.values()
+                if getattr(q, "inference_sequence_id", -1) != -1
+            ] or list(mgr.quantizers.values())
+            total = len(quantizers)
             calibrated = 0
             fully_quantized = 0
-            for q in mgr.quantizers.values():
+            for q in quantizers:
                 try:
                     if bool(q.search_done):
                         calibrated += 1
