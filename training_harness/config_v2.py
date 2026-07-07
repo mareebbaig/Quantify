@@ -182,6 +182,24 @@ class TrainerConfigV2:
     num_classes: int = 1000
     """Number of output classes, used by timm Mixup to build soft-target vectors."""
 
+    # ---- Breakdown detection and recovery ---------------------------------
+    breakdown_detection: bool = False
+    """Detect catastrophic val_acc drops and recover from the best checkpoint."""
+
+    breakdown_relative_drop: float = 0.7
+    """Trigger recovery when val_acc falls below (1 - 0.7) = 30 % of its peak.
+    A 70 % relative drop (e.g. 0.67 → 0.20) counts as a breakdown."""
+
+    breakdown_peak_min_factor: float = 10.0
+    """Detection is armed only after peak val_acc exceeds this multiple of the
+    random-chance accuracy (1/num_classes).  Prevents false triggers at epoch 0."""
+
+    breakdown_max_recoveries: int = 3
+    """Maximum number of recovery attempts before giving up."""
+
+    breakdown_lr_factor: float = 0.1
+    """LR is multiplied by this factor on each recovery (default: ÷10)."""
+
     # ---- EMA --------------------------------------------------------------
     ema_decay: float = 0.0
     """EMA decay for shadow model parameters. Set > 0 to enable (typical: 0.9999).
