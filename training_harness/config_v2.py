@@ -143,7 +143,7 @@ class TrainerConfigV2:
     reduce_lr_on_plateau: bool = False
     """Step a ReduceLROnPlateau scheduler each epoch using val_loss (or train_loss)."""
 
-    reduce_lr_patience: int = 5
+    reduce_lr_patience: int = 20
     """Epochs of no improvement before LR is reduced."""
 
     reduce_lr_factor: float = 0.5
@@ -154,6 +154,10 @@ class TrainerConfigV2:
 
     reduce_lr_threshold: float = 1e-4
     """Minimum change in monitored metric to count as improvement."""
+
+    reduce_lr_metric: str = "val_loss"
+    """Metric to monitor for ReduceLROnPlateau. Use 'val_acc' (mode=max) in QAT
+    since val_loss often diverges from accuracy once quantization noise is active."""
 
     # ---- MixUp / CutMix / Random Erasing ---------------------------------
     mixup: float = 0.0

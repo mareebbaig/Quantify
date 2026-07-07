@@ -52,6 +52,7 @@ from training_harness.trainer_v2 import QATTrainerV2
 from training_harness.config_v2 import TrainerConfigV2, QATScheduleConfigV2
 from training_harness.config import CheckpointConfig
 from utils.weight_mapping import load_timm_weights
+from utils.run_utils import env_default, next_run_dir, setup_output_tee
 
 
 # ---------------------------------------------------------------------------
@@ -127,9 +128,10 @@ def parse_args() -> argparse.Namespace:
     d.add_argument(
         "--data-dir",
         type=str,
-        default=None,
+        default=env_default("IMAGENET_DALI_PATH"),
         metavar="PATH",
-        help="ImageFolder root (train/ and val/). Uses DALI when set.",
+        help="ImageFolder root (train/ and val/). Uses DALI when set. "
+             "Defaults to $IMAGENET_DALI_PATH if set.",
     )
     d.add_argument("--hf-dataset", type=str, default="ILSVRC/imagenet-1k")
     d.add_argument("--num-workers", type=int, default=20)
@@ -185,14 +187,24 @@ def parse_args() -> argparse.Namespace:
     # ---- LR schedule -------------------------------------------------------
     s = p.add_argument_group("lr schedule")
     s.add_argument(
-        "--reduce-lr-patience", type=int, default=5,
+        "--reduce-lr-patience", type=int, default=20,
         help="ReduceLROnPlateau: epochs of no improvement before reducing LR",
     )
     s.add_argument("--reduce-lr-factor", type=float, default=0.5)
     s.add_argument("--reduce-lr-min-lr", type=float, default=1e-8)
+    s.add_argument(
+        "--reduce-lr-metric", type=str, default="val_loss",
+        help="Metric monitored by ReduceLROnPlateau (e.g. val_loss, val_acc)",
+    )
 
     # ---- Output ------------------------------------------------------------
     p.add_argument("--output-dir", type=str, default="output/imagenet_float")
+    p.add_argument(
+        "--new-run-dir",
+        action="store_true",
+        help="Auto-increment the output directory if it already exists "
+             "(output/imagenet_float → output/imagenet_float_1 → …).",
+    )
     p.add_argument("--experiment-name", type=str, default=None)
 
     # ---- Dry-run -----------------------------------------------------------
@@ -323,6 +335,11 @@ def _build_hf_loaders(args):
 def main() -> None:
     args = parse_args()
 
+    if args.new_run_dir:
+        args.output_dir = next_run_dir(args.output_dir)
+
+    setup_output_tee(args.output_dir)
+
     exp_name = args.experiment_name or f"{args.model}_float"
 
     print(f"\n{'═'*60}")
@@ -389,6 +406,7 @@ def main() -> None:
         reduce_lr_patience=args.reduce_lr_patience,
         reduce_lr_factor=args.reduce_lr_factor,
         reduce_lr_min_lr=args.reduce_lr_min_lr,
+        reduce_lr_metric=args.reduce_lr_metric,
 
         mixup=args.mixup,
         cutmix=args.cutmix,
@@ -413,6 +431,13 @@ def main() -> None:
 
     print(f"Checkpoint output: {os.path.abspath(config.checkpoint_dir)}")
     print(f"  Load in QAT script via:  --init-from-ptq {config.checkpoint_dir}/last.pt\n")
+
+    print("─" * 60)
+    print("  Pre-training evaluation (pretrained weights, quant off)")
+    print("─" * 60)
+    trainer.evaluate(val_loader,   label="val")
+    trainer.evaluate(train_loader, label="train")
+    print("─" * 60)
 
     tracker = trainer.fit()
 

@@ -48,6 +48,9 @@ FLOAT_WARMUP_EPOCHS="${FLOAT_WARMUP_EPOCHS:-0}"  # model is already PTQ-calibrat
 PLATEAU_PATIENCE="${PLATEAU_PATIENCE:-100}"
 QAT_GAP="${QAT_GAP:-100}"
 ANNEALING_STEPS="${ANNEALING_STEPS:-10}"
+REDUCE_LR_PATIENCE="${REDUCE_LR_PATIENCE:-20}"
+REDUCE_LR_FACTOR="${REDUCE_LR_FACTOR:-0.5}"
+REDUCE_LR_METRIC="${REDUCE_LR_METRIC:-val_loss}"
 MIXED_PRECISION="${MIXED_PRECISION:-0}"  # 0 = pass --no-mixed-precision
 
 OUTPUT_DIR_PTQ="${OUTPUT_DIR_PTQ:-output/ptq_lsb_search}"
@@ -200,6 +203,50 @@ fi
 # ── Step 5: Actual QAT training ──────────────────────────────────────────────
 #echo
 #echo "[5/5] QAT training (lr=$FOUND_LR)..."
+# "$PYTHON" -m examples.train_imagenet_qat \
+#     --model "$MODEL" \
+#     --weight-bits "$WEIGHT_BITS" \
+#     --act-bits "$ACT_BITS" \
+#     --bias-bits "$BIAS_BITS" \
+#     --num-classes "$NUM_CLASSES" \
+#     --epochs "$EPOCHS" \
+#     --batch-size "$BATCH_SIZE_QAT" \
+#     --lr "0.00001" \
+#     --weight-lsb-subtract "0" \
+#     --output-dir "$OUTPUT_DIR_QAT" \
+#     --experiment-name "$EXP_QAT" \
+#     --init-from-ptq "$ACTS_CKPT" \
+#     --float-warmup-epochs "0" \
+#     --plateau-patience "$PLATEAU_PATIENCE" \
+#     --reduce-lr-patience "$REDUCE_LR_PATIENCE" \
+#     --reduce-lr-factor "$REDUCE_LR_FACTOR" \
+#     --reduce-lr-metric "$REDUCE_LR_METRIC" \
+#     --qat-gap "0" \
+#     --annealing-steps "0" \
+#     "${DATA_FLAGS[@]}" "${MIXED_PRECISION_FLAG[@]}"
+
+"$PYTHON" -m examples.train_imagenet_qat \
+    --model "$MODEL" \
+    --weight-bits "$WEIGHT_BITS" \
+    --act-bits "$ACT_BITS" \
+    --bias-bits "$BIAS_BITS" \
+    --num-classes "$NUM_CLASSES" \
+    --epochs "80" \
+    --batch-size "$BATCH_SIZE_QAT" \
+    --lr "0.00001" \
+    --weight-lsb-subtract "0" \
+    --output-dir "$OUTPUT_DIR_QAT" \
+    --experiment-name "$EXP_QAT" \
+    --init-from-ptq "$ACTS_CKPT" \
+    --float-warmup-epochs "0" \
+    --plateau-patience "$PLATEAU_PATIENCE" \
+    --reduce-lr-patience "$REDUCE_LR_PATIENCE" \
+    --reduce-lr-factor "$REDUCE_LR_FACTOR" \
+    --reduce-lr-metric "$REDUCE_LR_METRIC" \
+    --qat-gap "0" \
+    --annealing-steps "0" \
+    "${DATA_FLAGS[@]}" "${MIXED_PRECISION_FLAG[@]}"
+
 "$PYTHON" -m examples.train_imagenet_qat \
     --model "$MODEL" \
     --weight-bits "$WEIGHT_BITS" \
@@ -208,12 +255,16 @@ fi
     --num-classes "$NUM_CLASSES" \
     --epochs "$EPOCHS" \
     --batch-size "$BATCH_SIZE_QAT" \
-    --lr "0.0001" \
+    --lr "0.00001" \
+    --weight-lsb-subtract "0" \
     --output-dir "$OUTPUT_DIR_QAT" \
     --experiment-name "$EXP_QAT" \
-    --init-from-ptq "$ACTS_CKPT" \
-    --float-warmup-epochs "$FLOAT_WARMUP_EPOCHS" \
+    --init-from-ptq "/home/th/Desktop/brevitas-quantizers/output/imagenet_qat/checkpoints/last.pt" \
+    --float-warmup-epochs "0" \
     --plateau-patience "$PLATEAU_PATIENCE" \
+    --reduce-lr-patience "$REDUCE_LR_PATIENCE" \
+    --reduce-lr-factor "$REDUCE_LR_FACTOR" \
+    --reduce-lr-metric "$REDUCE_LR_METRIC" \
     --qat-gap "0" \
     --annealing-steps "0" \
     "${DATA_FLAGS[@]}" "${MIXED_PRECISION_FLAG[@]}"
@@ -226,6 +277,7 @@ echo "  bias PTQ checkpoint       : $BIAS_CKPT"
 echo "  activation PTQ checkpoint : $ACTS_CKPT"
 echo "  QAT output                : ${OUTPUT_DIR_QAT}/${EXP_QAT}"
 echo "================================================================"
+ #   --float-warmup-epochs "$FLOAT_WARMUP_EPOCHS" \
  #   --lr "$FOUND_LR" \
  #   --qat-gap "$QAT_GAP" \
  #   --annealing-steps "$ANNEALING_STEPS" \

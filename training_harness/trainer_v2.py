@@ -78,6 +78,7 @@ class QATTrainerV2:
         scheduler=None,
         accuracy_fn: Optional[Callable] = None,
         onnx_dummy_input: Optional[torch.Tensor] = None,
+        extra_checkpoint_fields: Optional[Dict] = None,
     ):
         self.config = config
         self.model = model
@@ -178,10 +179,12 @@ class QATTrainerV2:
             )
 
         self._plateau_lr_sched = None
+        self._plateau_lr_metric = config.reduce_lr_metric
         if config.reduce_lr_on_plateau:
+            mode = "max" if config.reduce_lr_metric in ("val_acc", "train_acc") else "min"
             self._plateau_lr_sched = torch.optim.lr_scheduler.ReduceLROnPlateau(
                 optimizer,
-                mode="min",
+                mode=mode,
                 patience=config.reduce_lr_patience,
                 factor=config.reduce_lr_factor,
                 min_lr=config.reduce_lr_min_lr,
@@ -198,6 +201,7 @@ class QATTrainerV2:
         self._lr_history: List[float] = []
         self._qat_active: bool = False
         self._onnx_dummy_input = onnx_dummy_input
+        self._extra_checkpoint_fields: Dict = extra_checkpoint_fields or {}
 
     # ------------------------------------------------------------------
     # Pre-training / standalone evaluation
@@ -361,8 +365,11 @@ class QATTrainerV2:
                 all_metrics["quant_pct"] = fully / total if total > 0 else 0.0
 
             if self._plateau_lr_sched is not None:
-                plateau_loss = all_metrics.get("val_loss", all_metrics.get("train_loss", 0.0))
-                self._plateau_lr_sched.step(plateau_loss)
+                plateau_val = all_metrics.get(
+                    self._plateau_lr_metric,
+                    all_metrics.get("val_loss", all_metrics.get("train_loss", 0.0)),
+                )
+                self._plateau_lr_sched.step(plateau_val)
                 all_metrics["lr"] = self.optimizer.param_groups[0]["lr"]
 
             self.logger.log_epoch(epoch, all_metrics)
@@ -390,6 +397,10 @@ class QATTrainerV2:
                 self.tracker.record_scale_factors(epoch, scales)
                 self.logger.log_scale_factors(epoch, scales)
 
+            _ckpt_extra = {
+                **({"ema_state_dict": self._ema.state_dict()} if self._ema else {}),
+                **self._extra_checkpoint_fields,
+            }
             self.checkpoint_mgr.save(
                 epoch=epoch,
                 metric_value=monitor_val,
@@ -398,7 +409,7 @@ class QATTrainerV2:
                 scheduler=self.scheduler,
                 metrics_dict=all_metrics,
                 config_dict=self.config.to_dict(),
-                extra={"ema_state_dict": self._ema.state_dict()} if self._ema else None,
+                extra=_ckpt_extra or None,
                 dummy_input=self._onnx_dummy_input,
             )
 

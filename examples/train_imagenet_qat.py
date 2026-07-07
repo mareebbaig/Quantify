@@ -50,6 +50,7 @@ from training_harness.schedulers import WarmupCosineScheduler
 from training_harness.lr_finder import find_lr
 from utils.weight_mapping import load_timm_weights
 from utils.bn_fusion import fuse_bn_into_conv
+from utils.run_utils import env_default, next_run_dir, setup_output_tee
 
 
 # ---------------------------------------------------------------------------
@@ -109,11 +110,12 @@ def parse_args() -> argparse.Namespace:
     d.add_argument(
         "--data-dir",
         type=str,
-        default=None,
+        default=env_default("IMAGENET_DALI_PATH"),
         metavar="PATH",
         help="Path to ImageFolder dataset (train/ and val/ subdirs). "
              "When set, uses NVIDIA DALI instead of the HuggingFace dataloader. "
-             "Extract with: python scripts/extract_imagenet.py --output-dir PATH",
+             "Extract with: python scripts/extract_imagenet.py --output-dir PATH. "
+             "Defaults to $IMAGENET_DALI_PATH if set.",
     )
     d.add_argument(
         "--hf-dataset",
@@ -267,6 +269,13 @@ def parse_args() -> argparse.Namespace:
     # ---- Output ------------------------------------------------------------
     p.add_argument("--output-dir", type=str, default="output/imagenet_qat")
     p.add_argument(
+        "--new-run-dir",
+        action="store_true",
+        help="Auto-increment the output directory if it already exists "
+             "(output/imagenet_qat → output/imagenet_qat_1 → output/imagenet_qat_2 …). "
+             "Useful for keeping each run's checkpoints separate.",
+    )
+    p.add_argument(
         "--experiment-name",
         type=str,
         default=None,
@@ -312,6 +321,19 @@ def parse_args() -> argparse.Namespace:
     lr.add_argument(
         "--find-lr-calib-steps", type=int, default=10,
         help="Calibration pre-pass steps in Phase 1 (default: 10)",
+    )
+
+    # ---- Reduce LR on plateau -----------------------------------------------
+    rlr = p.add_argument_group("reduce lr on plateau")
+    rlr.add_argument("--reduce-lr-patience", type=int, default=20,
+                     help="Epochs of no improvement before reducing LR (default: 5)")
+    rlr.add_argument("--reduce-lr-factor", type=float, default=0.5,
+                     help="Multiplicative factor applied to LR on plateau (default: 0.5)")
+    rlr.add_argument("--reduce-lr-min-lr", type=float, default=1e-8,
+                     help="Lower bound on LR (default: 1e-8)")
+    rlr.add_argument(
+        "--reduce-lr-metric", type=str, default="val_loss",
+        help="Metric monitored by ReduceLROnPlateau (e.g. val_loss, val_acc)",
     )
 
     # ---- Init from a PTQ checkpoint -----------------------------------------
@@ -408,7 +430,7 @@ def _load_pretrained(model: nn.Module, args) -> nn.Module:
     return load_timm_weights(model, float_model, args.model)
 
 
-def _load_ptq_checkpoint(model: nn.Module, ckpt_path: str) -> nn.Module:
+def _load_ptq_checkpoint(model: nn.Module, ckpt_path: str) -> tuple[nn.Module, bool]:
     """
     Load a checkpoint produced by examples/find_perfect_lsbs_imagenet_ptq.py,
     typically the activations-mode run chained from a weights-mode run via
@@ -421,18 +443,24 @@ def _load_ptq_checkpoint(model: nn.Module, ckpt_path: str) -> nn.Module:
     than the one being constructed here will legitimately have mismatched
     quantizer buffers for the role that wasn't searched.
 
-    If the checkpoint was produced with --fuse-bn, its model_state_dict has
-    BatchNorm folded into the preceding conv/linear (conv gained a bias,
-    BatchNorm became Identity) — loading that into a freshly built model
-    that still has separate, randomly-initialized BatchNorm layers would
-    leave BatchNorm untrained and silently produce garbage output. Detect
-    this via extra.fuse_bn and fuse this model's BatchNorm the same way
-    before loading, so the module structures match.
+    If the checkpoint was produced with --fuse-bn (or was itself a QAT
+    checkpoint saved from such a run), its model_state_dict has BatchNorm
+    folded into the preceding conv/linear (conv gained a bias, BatchNorm
+    became Identity) — loading that into a freshly built model that still
+    has separate, randomly-initialized BatchNorm layers would leave BatchNorm
+    untrained and silently produce garbage output. Detect this via
+    extra.fuse_bn and fuse this model's BatchNorm the same way before
+    loading, so the module structures match.
+
+    Returns (model, bn_fused) so the caller can propagate fuse_bn=True into
+    subsequent checkpoint saves, allowing further chained runs to work.
     """
     print(f"[init-from-ptq] Loading {ckpt_path} …")
     payload = torch.load(ckpt_path, map_location="cpu")
+    bn_fused = False
     if payload.get("extra", {}).get("fuse_bn"):
         n_fused = fuse_bn_into_conv(model)
+        bn_fused = True
         print(f"[init-from-ptq] Checkpoint was produced with --fuse-bn; fused "
               f"{n_fused} BatchNorm layer(s) into preceding conv/linear weights "
               f"to match its module structure.")
@@ -444,7 +472,7 @@ def _load_ptq_checkpoint(model: nn.Module, ckpt_path: str) -> nn.Module:
     metrics = payload.get("metrics", {})
     if metrics:
         print(f"[init-from-ptq] Checkpoint metrics: {metrics}")
-    return model
+    return model, bn_fused
 
 
 def _disable_act_quant_proxies(model: nn.Module) -> None:
@@ -579,6 +607,12 @@ def main() -> None:
     act_quant    = _make_act_quant(args)
     bias_quant   = _make_bias_quant(args)
 
+    # Resolve output directory (auto-increment if --new-run-dir is set)
+    if args.new_run_dir:
+        args.output_dir = next_run_dir(args.output_dir)
+
+    setup_output_tee(args.output_dir)
+
     # Derive a descriptive experiment name if not provided
     weight_desc = (
         f"coeffs_{os.path.splitext(os.path.basename(args.weight_coeffs))[0]}"
@@ -605,8 +639,9 @@ def main() -> None:
     model = _build_model(args, weight_quant, act_quant, bias_quant)
     if args.pretrained:
         model = _load_pretrained(model, args)
+    bn_fused = False
     if args.init_from_ptq:
-        model = _load_ptq_checkpoint(model, args.init_from_ptq)
+        model, bn_fused = _load_ptq_checkpoint(model, args.init_from_ptq)
 
     if args.weight_lsb_subtract:
         _apply_weight_lsb_subtract(model, args.weight_lsb_subtract)
@@ -677,9 +712,10 @@ def main() -> None:
 
         early_stopping_patience=None,
         reduce_lr_on_plateau=True,
-        reduce_lr_patience=5,
-        reduce_lr_factor=0.5,
-        reduce_lr_min_lr=1e-8,
+        reduce_lr_patience=args.reduce_lr_patience,
+        reduce_lr_factor=args.reduce_lr_factor,
+        reduce_lr_min_lr=args.reduce_lr_min_lr,
+        reduce_lr_metric=args.reduce_lr_metric,
 
         mixup=args.mixup,
         cutmix=args.cutmix,
@@ -700,6 +736,7 @@ def main() -> None:
         loss_fn=nn.CrossEntropyLoss(),
         scheduler=scheduler,
         onnx_dummy_input=torch.zeros(1, 3, 224, 224),
+        extra_checkpoint_fields={"fuse_bn": True} if bn_fused else None,
     )
 
     print("\nPre-training evaluation (eval mode, quantization disabled):")
