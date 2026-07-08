@@ -14,7 +14,20 @@ from .control import (
     ControlManager,
     ControlValidationError,
 )
-from .server import DashboardAPIServer, create_app
+
+# server.py pulls in Flask. Expose its symbols lazily (PEP 562) so that
+# merely constructing a Trainer — which imports CallbackRegistry from this
+# package to build its callback registry — does NOT import Flask unless the
+# monitoring API is actually enabled (api_port set).
+_LAZY = {"DashboardAPIServer", "create_app"}
+
+
+def __getattr__(name):
+    if name in _LAZY:
+        from . import server
+        return getattr(server, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "RunStateCollector",
