@@ -300,6 +300,8 @@ class QATTrainerV2:
             print(f"               train_acc is approximate (pre-mixup hard labels)")
         if self._erasing_fn is not None:
             print(f"  RandErase  : prob={self.config.reprob}  mode=pixel")
+        if self.config.freeze_bn:
+            print(f"  Freeze BN  : True  (running stats locked from checkpoint)")
         print(f"  ── Output paths ──────────────────────────────────────")
         print(f"  Logs       : {abs_logs}")
         print(f"  Checkpoints: {abs_ckpt}")
@@ -680,6 +682,11 @@ class QATTrainerV2:
         loader = self.train_loader if is_train else self.val_loader
 
         self.model.train(is_train)
+        # model.train() is recursive and would re-enable BN stats accumulation.
+        # Re-apply freeze after the call so BN uses checkpoint running stats.
+        if is_train and (self.config.freeze_bn or
+                         (self._qat_active and self.config.qat.freeze_bn_at_qat)):
+            freeze_bn(self.model)
         max_batches = self.config.dry_run_batches if self.config.dry_run else len(loader)
 
         running_loss = 0.0

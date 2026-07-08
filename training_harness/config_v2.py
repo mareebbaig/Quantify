@@ -206,6 +206,14 @@ class TrainerConfigV2:
     Validation uses EMA weights via a temporary parameter swap; the EMA state is
     bundled into every checkpoint's 'extra' key for post-training recovery."""
 
+    # ---- BN freezing -------------------------------------------------------
+    freeze_bn: bool = False
+    """Freeze BatchNorm running stats and affine params throughout training.
+    Use when fine-tuning from a converged checkpoint to prevent BN stat drift
+    from heavy augmentation causing val_acc regression at low LR.
+    Applied at the start of every training epoch (after model.train()), so it
+    overrides the recursive model.train() call that would otherwise unfreeze BN."""
+
     # ---- Helpers -----------------------------------------------------------
     def resolve_device(self) -> str:
         import torch

@@ -169,6 +169,10 @@ def parse_args() -> argparse.Namespace:
                    help="Random Erasing probability (0 = off)")
     t.add_argument("--ema-decay", type=float, default=0.9999,
                    help="EMA shadow model decay (0 = off)")
+    t.add_argument("--freeze-bn", action="store_true", default=False,
+                   help="Freeze BatchNorm running stats and affine params throughout "
+                        "training. Prevents BN stat drift from heavy augmentation "
+                        "causing val_acc regression when fine-tuning at low LR.")
     t.add_argument(
         "--repeat-aug",
         type=int,
@@ -416,6 +420,7 @@ def main() -> None:
         reprob=args.reprob,
         num_classes=args.num_classes,
         ema_decay=args.ema_decay,
+        freeze_bn=args.freeze_bn,
     )
 
     trainer = QATTrainerV2(
