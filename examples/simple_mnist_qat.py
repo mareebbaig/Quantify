@@ -122,6 +122,7 @@ def train():
         epochs=EPOCHS,
         batch_size=BATCH_SIZE,
         learning_rate=LR,
+	api_port=8765,
         quant_schedule=QuantScheduleConfig(
             float_warmup_epochs=5,
             calibration_batches=10,
