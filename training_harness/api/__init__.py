@@ -9,6 +9,11 @@ to add them later).
 """
 
 from .collector import RunStateCollector, TRAIN_ACC_CAVEAT
+from .control import (
+    CallbackRegistry,
+    ControlManager,
+    ControlValidationError,
+)
 from .server import DashboardAPIServer, create_app
 
 __all__ = [
@@ -16,4 +21,7 @@ __all__ = [
     "DashboardAPIServer",
     "create_app",
     "TRAIN_ACC_CAVEAT",
+    "CallbackRegistry",
+    "ControlManager",
+    "ControlValidationError",
 ]
