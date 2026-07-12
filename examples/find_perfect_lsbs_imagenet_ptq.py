@@ -838,6 +838,26 @@ def _set_search_states(
             q.search_done.fill_(True)
 
 
+def _disable_target_role_keep_others_active(mgr: QuantizerManager, target_role: str) -> None:
+    """Backward-compatible shim over _set_search_states that infers the roles to
+    keep active from search_done (any non-target quantizer already calibrated)
+    rather than taking them explicitly.
+
+    Kept for the single-role --init-from-ckpt chaining path (and its tests):
+    there, the roles carried in from the checkpoint are exactly the ones with
+    search_done=True, so inferring is equivalent to passing them. The multi-role
+    in-process search instead calls _set_search_states with an explicit
+    active_roles set (see the module docstring on _set_search_states for why
+    that distinction matters).
+    """
+    active_roles = {
+        q.quantizer_role
+        for q in mgr.quantizers.values()
+        if q.quantizer_role != target_role and q.search_done.item()
+    }
+    _set_search_states(mgr, target_role, active_roles)
+
+
 def search_role_lsbs(
     *,
     model: nn.Module,
