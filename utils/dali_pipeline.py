@@ -24,29 +24,18 @@ from nvidia.dali import fn, pipeline_def, types
 from nvidia.dali.plugin.pytorch import DALIClassificationIterator, LastBatchPolicy
 from nvidia.dali.auto_aug import rand_augment
 
-# Default normalization: standard ImageNet statistics (used by torchvision and
-# most timm checkpoints). Some checkpoints — e.g. timm's mobilenetv1_100.ra4 —
-# were trained with mean=std=0.5 instead, so mean/std are configurable per model.
-IMAGENET_MEAN = (0.485, 0.456, 0.406)
-IMAGENET_STD = (0.229, 0.224, 0.225)
-HALF_MEAN = (0.5, 0.5, 0.5)
-HALF_STD = (0.5, 0.5, 0.5)
-
-# Normalization matching each model's pretrained timm checkpoint. Most use
-# standard ImageNet stats, but timm's mobilenetv1_100.ra4 checkpoint was trained
-# with inception-style mean=std=0.5 — feeding it ImageNet-normalized inputs
-# collapses accuracy (~17% instead of ~73%).
-_MODEL_NORM = {
-    "resnet18":    (IMAGENET_MEAN, IMAGENET_STD),
-    "resnet50":    (IMAGENET_MEAN, IMAGENET_STD),
-    "mobilenetv1": (HALF_MEAN, HALF_STD),
-    "mobilenetv2": (IMAGENET_MEAN, IMAGENET_STD),
-}
-
-
-def norm_for_model(arch: str):
-    """Return the (mean, std) normalization matching a model's pretrained checkpoint."""
-    return _MODEL_NORM.get(arch, (IMAGENET_MEAN, IMAGENET_STD))
+# Normalization stats live in utils/normalization.py so they can be resolved
+# without importing DALI (this module imports nvidia.dali at module scope).
+# Re-exported here so existing `from utils.dali_pipeline import norm_for_model`
+# imports keep working — utils/normalization.py is the source of truth.
+from utils.normalization import (  # noqa: F401  (re-export)
+    HALF_MEAN,
+    HALF_STD,
+    IMAGENET_MEAN,
+    IMAGENET_STD,
+    _MODEL_NORM,
+    norm_for_model,
+)
 
 
 # ---------------------------------------------------------------------------
