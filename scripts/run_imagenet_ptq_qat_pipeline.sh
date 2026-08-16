@@ -87,6 +87,17 @@ _ptq_ckpt_already_done() {
     [[ -f "$1" && "$FORCE_LSB_SEARCH" != "1" ]]
 }
 
+# Print the last.pt path of the newest run under a QAT output directory.
+# Every run writes <output-dir>/latest.json (see orchestration/run_builder.py);
+# prints nothing when the file is missing or unreadable.
+_latest_checkpoint() {
+    local base="$1"
+    local pointer="${base}/latest.json"
+    [[ -f "$pointer" ]] || return 0
+    "$PYTHON" -c "import json,sys; print(json.load(open(sys.argv[1]))['last_checkpoint'])" \
+        "$pointer" 2>/dev/null
+}
+
 WEIGHTS_CKPT="${OUTPUT_DIR_PTQ}/${EXP_WEIGHTS}/ptq_calibrated_model.pt"
 BIAS_CKPT="${OUTPUT_DIR_PTQ}/${EXP_BIAS}/ptq_calibrated_model.pt"
 ACTS_CKPT="${OUTPUT_DIR_PTQ}/${EXP_ACTS}/ptq_calibrated_model.pt"
@@ -247,6 +258,21 @@ fi
     --annealing-steps "0" \
     "${DATA_FLAGS[@]}" "${MIXED_PRECISION_FLAG[@]}"
 
+# Continue from the checkpoint the previous QAT run just produced.
+#
+# Runs now write to a per-run directory (<output-dir>/runs/<run_id>/) so each
+# run gets its own checkpoint pool — previously every run shared
+# <output-dir>/checkpoints/ and a later run could evict an earlier run's
+# top-K files. The stable address for "the newest run under this base
+# directory" is <output-dir>/latest.json, written by every run.
+PREV_QAT_CKPT="$(_latest_checkpoint "$OUTPUT_DIR_QAT")"
+if [[ -z "$PREV_QAT_CKPT" || ! -f "$PREV_QAT_CKPT" ]]; then
+    echo "[ERROR] Could not resolve the previous QAT checkpoint from" >&2
+    echo "        ${OUTPUT_DIR_QAT}/latest.json (got: '${PREV_QAT_CKPT}')." >&2
+    exit 1
+fi
+echo "  -> continuing from: $PREV_QAT_CKPT"
+
 "$PYTHON" -m examples.train_imagenet_qat \
     --model "$MODEL" \
     --weight-bits "$WEIGHT_BITS" \
@@ -259,7 +285,7 @@ fi
     --weight-lsb-subtract "0" \
     --output-dir "$OUTPUT_DIR_QAT" \
     --experiment-name "$EXP_QAT" \
-    --init-from-ptq "/home/th/Desktop/brevitas-quantizers/output/imagenet_qat/checkpoints/last.pt" \
+    --init-from-ptq "$PREV_QAT_CKPT" \
     --float-warmup-epochs "0" \
     --plateau-patience "$PLATEAU_PATIENCE" \
     --reduce-lr-patience "$REDUCE_LR_PATIENCE" \
