@@ -34,24 +34,19 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 
-from models.resnet_quant import QuantResNet18, QuantResNet50
-from models.mobilenetv1_quant import QuantMobileNetV1
-from models.mobilenetv2_quant import QuantMobileNetV2
-from quantizers.fixedpoint_per_tensor import (
-    FixedPointPerTensorWeightQuant,
-    FixedPointPerTensorActivationQuant,
-    FixedPointPerTensorBiasQuant,
-)
-from quantizers.coefficient_per_tensor_weights import CoefficientPerTensorWeightQuant
 from quantizers.manager import QuantizerManager
-from training_harness.trainer_v2 import QATTrainerV2
+from orchestration.checkpoint_init import (
+    load_pretrained_weights,
+    load_ptq_checkpoint as _load_ptq_checkpoint,
+)
+from orchestration.registry import AUGMENTATIONS, get_model
+from orchestration.run_builder import build_run, make_injectors
+from orchestration.run_spec import LRScheduleSpec, QuantSpec, RunSpec
 from training_harness.config_v2 import TrainerConfigV2, QATScheduleConfigV2
 from training_harness.config import CheckpointConfig
-from training_harness.schedulers import WarmupCosineScheduler
 from training_harness.lr_finder import find_lr
-from utils.weight_mapping import load_timm_weights
 from utils.bn_fusion import fuse_bn_into_conv
-from utils.run_utils import env_default, next_run_dir, setup_output_tee
+from utils.run_utils import env_default, next_run_dir
 
 
 # ---------------------------------------------------------------------------
@@ -448,31 +443,20 @@ def parse_args() -> argparse.Namespace:
 # Quantizer factories
 # ---------------------------------------------------------------------------
 
-def _make_weight_quant(args: argparse.Namespace):
-    if args.weight_coeffs:
-        fp = args.weight_coeffs
-        class WeightQuant(CoefficientPerTensorWeightQuant):
-            filepath = fp
-        return WeightQuant
+# These wrap orchestration.run_builder.make_injectors so the argparse-shaped
+# call sites (and any external caller) keep working. The construction itself
+# now lives in one place, driven by a QuantSpec.
 
-    bw = args.weight_bits
-    class WeightQuant(FixedPointPerTensorWeightQuant):
-        bit_width = bw
-    return WeightQuant
+def _make_weight_quant(args: argparse.Namespace):
+    return make_injectors(_quant_spec_from_args(args))[0]
 
 
 def _make_act_quant(args: argparse.Namespace):
-    bw = args.act_bits
-    class ActQuant(FixedPointPerTensorActivationQuant):
-        bit_width = bw
-    return ActQuant
+    return make_injectors(_quant_spec_from_args(args))[1]
 
 
 def _make_bias_quant(args: argparse.Namespace):
-    bw = args.bias_bits
-    class BiasQuant(FixedPointPerTensorBiasQuant):
-        bit_width = bw
-    return BiasQuant
+    return make_injectors(_quant_spec_from_args(args))[2]
 
 
 # ---------------------------------------------------------------------------
@@ -480,81 +464,17 @@ def _make_bias_quant(args: argparse.Namespace):
 # ---------------------------------------------------------------------------
 
 def _build_model(args, weight_quant, act_quant, bias_quant) -> nn.Module:
-    nc = args.num_classes
-    if args.model == "resnet18":
-        return QuantResNet18(nc, weight_quant, act_quant, bias_quant)
-    if args.model == "resnet50":
-        return QuantResNet50(nc, weight_quant, act_quant, bias_quant)
-    if args.model == "mobilenetv1":
-        return QuantMobileNetV1(nc, weight_quant, act_quant, bias_quant)
-    if args.model == "mobilenetv2":
-        return QuantMobileNetV2(nc, weight_quant=weight_quant, act_quant=act_quant, bias_quant=bias_quant)
-    raise ValueError(f"Unknown model: {args.model}")
-
-
-_TIMM_NAMES = {
-    "resnet18":    "resnet18.a1_in1k",
-    "resnet50":    "resnet50.a1_in1k",
-    "mobilenetv1": "mobilenetv1_100.ra4_e3600_r224_in1k",
-    "mobilenetv2": "mobilenetv2_100.ra_in1k",
-}
+    """Build the named architecture. Delegates to the model registry, which is
+    now the single place mapping a model name to a constructor."""
+    return get_model(args.model).build(
+        args.num_classes, (weight_quant, act_quant, bias_quant)
+    )
 
 
 def _load_pretrained(model: nn.Module, args) -> nn.Module:
-    import timm
-    timm_name = _TIMM_NAMES.get(args.model)
-    if timm_name is None:
-        print(f"[pretrained] No timm weights configured for {args.model}, skipping.")
-        return model
-    print(f"[pretrained] Loading timm {timm_name} …")
-    float_model = timm.create_model(timm_name, pretrained=True)
-    float_model.eval()
-    return load_timm_weights(model, float_model, args.model)
-
-
-def _load_ptq_checkpoint(model: nn.Module, ckpt_path: str) -> tuple[nn.Module, bool]:
-    """
-    Load a checkpoint produced by examples/find_perfect_lsbs_imagenet_ptq.py,
-    typically the activations-mode run chained from a weights-mode run via
-    that script's --init-from-ckpt so both roles are calibrated.
-
-    Uses strict=False and does NOT reset calibration buffers — search_done /
-    search_result_lsb / annealing_alpha are loaded as-is so the PTQ-found
-    LSBs are what QAT starts from. Missing/unexpected keys are reported but
-    not fatal: a checkpoint produced with a different --mode / model variant
-    than the one being constructed here will legitimately have mismatched
-    quantizer buffers for the role that wasn't searched.
-
-    If the checkpoint was produced with --fuse-bn (or was itself a QAT
-    checkpoint saved from such a run), its model_state_dict has BatchNorm
-    folded into the preceding conv/linear (conv gained a bias, BatchNorm
-    became Identity) — loading that into a freshly built model that still
-    has separate, randomly-initialized BatchNorm layers would leave BatchNorm
-    untrained and silently produce garbage output. Detect this via
-    extra.fuse_bn and fuse this model's BatchNorm the same way before
-    loading, so the module structures match.
-
-    Returns (model, bn_fused) so the caller can propagate fuse_bn=True into
-    subsequent checkpoint saves, allowing further chained runs to work.
-    """
-    print(f"[init-from-ptq] Loading {ckpt_path} …")
-    payload = torch.load(ckpt_path, map_location="cpu")
-    bn_fused = False
-    if payload.get("extra", {}).get("fuse_bn"):
-        n_fused = fuse_bn_into_conv(model)
-        bn_fused = True
-        print(f"[init-from-ptq] Checkpoint was produced with --fuse-bn; fused "
-              f"{n_fused} BatchNorm layer(s) into preceding conv/linear weights "
-              f"to match its module structure.")
-    incompatible = model.load_state_dict(payload["model_state_dict"], strict=False)
-    if incompatible.missing_keys:
-        print(f"[init-from-ptq] Missing keys: {incompatible.missing_keys}")
-    if incompatible.unexpected_keys:
-        print(f"[init-from-ptq] Unexpected keys: {incompatible.unexpected_keys}")
-    metrics = payload.get("metrics", {})
-    if metrics:
-        print(f"[init-from-ptq] Checkpoint metrics: {metrics}")
-    return model, bn_fused
+    """Load timm float weights. The name → timm id mapping moved into the
+    model registry (ModelEntry.timm_name)."""
+    return load_pretrained_weights(model, args.model)
 
 
 def _default_pretrained_qat_cache(args) -> str:
@@ -803,137 +723,66 @@ class RepeatAugSampler(torch.utils.data.Sampler):
                 yield idx
 
 
-def _build_dataloaders(args):
-    if args.data_dir:
-        return _build_dali_loaders(args)
-    return _build_hf_loaders(args)
+# Loader construction moved to orchestration/registry.py (DATASETS["imagenet"]),
+# so there is one DALI call site instead of two drifting copies. The
+# HuggingFace path was already dead (it raised "Deprecated. Use dali instead.");
+# a run without --data-dir now fails in resolve_data_dir with a message naming
+# both --data-dir and $IMAGENET_DALI_PATH.
 
-
-def _build_dali_loaders(args):
-    from utils.dali_pipeline import build_dali_loaders, norm_for_model
-    mean, std = norm_for_model(args.model)
-    print(f"Building DALI loaders from {args.data_dir} …")
-    print(f"  normalization for {args.model}: mean={mean} std={std}")
-    train_loader, val_loader = build_dali_loaders(
-        data_dir=args.data_dir,
-        batch_size=args.batch_size,
-        num_threads=args.dali_threads,
-        randaugment_n=args.randaugment_n,
-        randaugment_m=args.randaugment_m,
-        mean=mean,
-        std=std,
-    )
-    print(f"  train: {len(train_loader):,} batches   val: {len(val_loader):,} batches")
-    return train_loader, val_loader
-
-
-
-def _build_hf_loaders(args):
-    raise Exception("Deprecated. Use dali instead.")
 
 # ---------------------------------------------------------------------------
-# Main
+# argparse → RunSpec adapter
 # ---------------------------------------------------------------------------
 
-def main() -> None:
-    args = parse_args()
+def _quant_spec_from_args(args: argparse.Namespace) -> QuantSpec:
+    """Map the quantization flags onto a QuantSpec.
 
-    # Build quantizer injector classes
-    weight_quant = _make_weight_quant(args)
-    act_quant    = _make_act_quant(args)
-    bias_quant   = _make_bias_quant(args)
-
-    # Resolve output directory (auto-increment if --new-run-dir is set)
-    if args.new_run_dir:
-        args.output_dir = next_run_dir(args.output_dir)
-
-    setup_output_tee(args.output_dir)
-
-    # Derive a descriptive experiment name if not provided
-    weight_desc = (
-        f"coeffs_{os.path.splitext(os.path.basename(args.weight_coeffs))[0]}"
-        if args.weight_coeffs
-        else f"W{args.weight_bits}"
-    )
-    exp_name = args.experiment_name or f"{args.model}_{weight_desc}_A{args.act_bits}_B{args.bias_bits}"
-
-    print(f"\n{'═'*60}")
-    print(f"  Experiment : {exp_name}")
-    print(f"  Model      : {args.model}")
-    print(f"  Weight Q   : {weight_desc}")
-    print(f"  Act Q      : A{args.act_bits}")
-    print(f"  Bias Q     : B{args.bias_bits}")
-    print(f"  Pretrained : {args.pretrained_qat or args.pretrained}"
-          f"{'  (+ in-process LSB search)' if args.pretrained_qat else ''}")
-    print(f"  AMP        : {args.mixed_precision}")
-    if args.data_dir:
-        print(f"  Data       : DALI  ({args.data_dir})  threads={args.dali_threads}")
-    else:
-        print(f"  Data       : HuggingFace ({args.hf_dataset})  workers={args.num_workers}")
-    print(f"{'═'*60}\n")
-
-    # Data (built before the model is loaded because --pretrained-qat's LSB
-    # search needs the validation loader and a calibration batch).
-    train_loader, val_loader = _build_dataloaders(args)
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # Build model
-    model = _build_model(args, weight_quant, act_quant, bias_quant)
-    bn_fused = False
-    if args.pretrained_qat:
-        model, bn_fused = _prepare_pretrained_qat(args, model, device, train_loader, val_loader)
-    elif args.pretrained:
-        model = _load_pretrained(model, args)
-    if args.init_from_ptq:
-        model, bn_fused = _load_ptq_checkpoint(model, args.init_from_ptq)
-
-    if args.weight_lsb_subtract:
-        _apply_weight_lsb_subtract(model, args.weight_lsb_subtract)
-
-    # Optimizer
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=args.lr, weight_decay=args.weight_decay,
+    --weight-bits and --weight-coeffs are a mutually exclusive argparse group,
+    but --weight-bits keeps its default (8) in the namespace even when
+    --weight-coeffs was passed. QuantSpec models the exclusivity properly, so
+    weight_bits is cleared when coefficients win — matching the old
+    _make_weight_quant, which checked weight_coeffs first.
+    """
+    using_coeffs = bool(args.weight_coeffs)
+    return QuantSpec(
+        weight_bits=None if using_coeffs else args.weight_bits,
+        weight_coeffs=args.weight_coeffs if using_coeffs else None,
+        act_bits=args.act_bits,
+        bias_bits=args.bias_bits,
+        weight_lsb_subtract=args.weight_lsb_subtract,
     )
 
-    # ── LR Finder mode ───────────────────────────────────────────────────────
-    if args.find_lr:
-        find_lr(
-            model=model,
-            optimizer=optimizer,
-            train_loader=train_loader,
-            loss_fn=nn.CrossEntropyLoss(),
-            device="auto",
-            calibration_steps=args.find_lr_calib_steps,
-            sweep_start_lr=args.find_lr_sweep_start,
-            sweep_end_lr=args.find_lr_sweep_end,
-            sweep_steps=args.find_lr_steps,
-            out_dir=os.path.join(args.output_dir, "lr_finder"),
-            grad_clip_norm=1.0,
-        )
-        return
-    # ─────────────────────────────────────────────────────────────────────────
-    # By default ReduceLROnPlateau manages the LR epoch-by-epoch inside the
-    # harness. A per-step cosine scheduler would override every plateau-triggered
-    # reduction on the very next batch, so the two cannot coexist; --cosine-lr
-    # swaps to cosine and disables the plateau scheduler below.
-    scheduler = None
-    if args.cosine_lr:
-        total_steps = len(train_loader) * args.epochs
-        scheduler = WarmupCosineScheduler(
-            optimizer,
-            warmup_steps=int(total_steps * args.cosine_warmup_frac),
-            total_steps=total_steps,
-            eta_min=args.cosine_eta_min,
-        )
-        print(f"[lr-schedule] Cosine: total_steps={total_steps:,} "
-              f"warmup={int(total_steps * args.cosine_warmup_frac):,} "
-              f"eta_min={args.cosine_eta_min} (ReduceLROnPlateau disabled)")
 
-    # V2 harness config
-    config = TrainerConfigV2(
+def spec_from_args(args: argparse.Namespace) -> RunSpec:
+    """Build the RunSpec this command line describes.
+
+    Every value here comes straight from a flag — the CLI's defaults and
+    behaviour are unchanged; they are just expressed as data now. Kept as a
+    separate function so the regression test can assert, without launching a
+    run, that a given command line still produces the config the old
+    imperative main() built.
+    """
+    output_dir = next_run_dir(args.output_dir) if args.new_run_dir else args.output_dir
+
+    quant = _quant_spec_from_args(args)
+    weight_desc = quant.describe()
+    exp_name = args.experiment_name or \
+        f"{args.model}_{weight_desc}_A{args.act_bits}_B{args.bias_bits}"
+
+    # Only record deviations from the preset, so a default command line
+    # serializes as a clean "imagenet_default" with no overrides.
+    preset = "imagenet_default"
+    preset_defaults = AUGMENTATIONS[preset].params
+    overrides = {
+        key: value
+        for key, value in (("randaugment_n", args.randaugment_n),
+                           ("randaugment_m", args.randaugment_m))
+        if value != preset_defaults[key]
+    }
+
+    training = TrainerConfigV2(
         experiment_name=exp_name,
-        output_dir=args.output_dir,
+        output_dir=output_dir,
         epochs=args.epochs,
         batch_size=args.batch_size,
         learning_rate=args.lr,
@@ -981,21 +830,72 @@ def main() -> None:
         ema_decay=args.ema_decay,
     )
 
-    trainer = QATTrainerV2(
-        config=config,
-        model=model,
-        optimizer=optimizer,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        loss_fn=nn.CrossEntropyLoss(),
-        scheduler=scheduler,
-        onnx_dummy_input=torch.zeros(1, 3, 224, 224),
-        extra_checkpoint_fields={"fuse_bn": True} if bn_fused else None,
+    return RunSpec(
+        model=args.model,
+        dataset="imagenet",
+        augmentation=preset,
+        augmentation_overrides=overrides,
+        experiment_name=exp_name,
+        output_dir=output_dir,
+        data_dir=args.data_dir,
+        dali_threads=args.dali_threads,
+        init_checkpoint=args.init_from_ptq,
+        pretrained=args.pretrained,
+        pretrained_qat=args.pretrained_qat,
+        pretrained_qat_cache=args.pretrained_qat_cache,
+        ptq_search_radius=args.ptq_search_radius,
+        ptq_eval_batches=args.ptq_eval_batches,
+        force_lsb_search=args.force_lsb_search,
+        quant=quant,
+        optimizer="adamw",
+        lr_schedule=LRScheduleSpec(
+            kind="cosine" if args.cosine_lr else "plateau",
+            cosine_warmup_frac=args.cosine_warmup_frac,
+            cosine_eta_min=args.cosine_eta_min,
+        ),
+        training=training,
     )
 
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    """Thin adapter: argv → RunSpec → build_run → fit.
+
+    Every flag, default and behaviour is unchanged; the object construction
+    that used to live here now lives in orchestration.run_builder.build_run,
+    so the CLI and a programmatic launcher build runs the same way.
+    """
+    args = parse_args()
+
+    spec = spec_from_args(args)
+    handle = build_run(spec, tee_stdout=True)
+
+    # ── LR Finder mode ───────────────────────────────────────────────────────
+    if args.find_lr:
+        find_lr(
+            model=handle.model,
+            optimizer=handle.optimizer,
+            train_loader=handle.train_loader,
+            loss_fn=nn.CrossEntropyLoss(),
+            device="auto",
+            calibration_steps=args.find_lr_calib_steps,
+            sweep_start_lr=args.find_lr_sweep_start,
+            sweep_end_lr=args.find_lr_sweep_end,
+            sweep_steps=args.find_lr_steps,
+            out_dir=os.path.join(handle.run_dir, "lr_finder"),
+            grad_clip_norm=1.0,
+        )
+        return
+    # ─────────────────────────────────────────────────────────────────────────
+
+    trainer = handle.trainer
+
     print("\nPre-training evaluation (eval mode, quantization disabled):")
-    trainer.evaluate(val_loader,   label="val  ")
-    trainer.evaluate(train_loader, label="train")
+    trainer.evaluate(handle.val_loader,   label="val  ")
+    trainer.evaluate(handle.train_loader, label="train")
     print()
 
     # When --weight-lsb-subtract is active, re-disable activation proxies after
@@ -1005,7 +905,7 @@ def main() -> None:
         def epoch_hook(trainer, epoch, snap):
             _disable_act_quant_proxies(trainer.model)
 
-    tracker = trainer.fit(after_epoch_hook=epoch_hook)
+    tracker = handle.fit(after_epoch_hook=epoch_hook)
 
     best_acc = tracker.best_value("val_acc", "max")
     print(f"\nDone. Best val_acc: {best_acc:.4f}")
