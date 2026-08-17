@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% set active = 'runs' %}
+{% block title %}Runs — Orchestrator{% endblock %}
+
+{% block topbar_extra %}
+  <span class="roots">{{ roots | join('  ·  ') }}</span>
+{% endblock %}
+
+{% block content %}
+<div id="banner" class="banner" style="display:none"></div>
+
+<div class="panel">
+  <h2>All runs ({{ runs | length }})</h2>
+  {% if not runs %}
+    <div class="empty">
+      No runs found under the configured roots.<br>
+      <a href="/launch">Launch one</a>, or point the service at another directory with
+      <span class="mono">--root</span>.
+    </div>
+  {% else %}
+  <table id="runs-table">
+    <thead>
+      <tr>
+        <th class="sortable" data-col="0">Run</th>
+        <th class="sortable" data-col="1">State</th>
+        <th class="sortable" data-col="2">Model</th>
+        <th class="sortable" data-col="3">Dataset</th>
+        <th>Quant</th>
+        <th class="sortable" data-col="5">Started</th>
+        <th>Epochs</th>
+        <th class="sortable num" data-col="7">Best</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for run in runs %}
+      <tr>
+        <td>
+          <a href="/runs/{{ run.run_id }}" class="mono">{{ run.run_id }}</a>
+          <div class="muted" style="font-size:11px">{{ run.experiment_name or '' }}</div>
+        </td>
+        <td data-sort="{{ run.state }}">
+          <span class="pill {{ run.state }}"><span class="dot"></span>{{ run.state }}</span>
+        </td>
+        <td>{{ run.model or '—' }}</td>
+        <td>{{ run.dataset or '—' }}</td>
+        <td class="mono muted">{{ run.quant or '—' }}</td>
+        <td class="mono muted" data-sort="{{ run.created_at or '' }}">{{ run.created_at or '—' }}</td>
+        <td class="num">
+          {{ run.epochs_completed if run.epochs_completed is not none else '—' }}{% if run.total_epochs %}<span class="muted">/{{ run.total_epochs }}</span>{% endif %}
+        </td>
+        <td class="num mono" data-sort="{{ run.best_value if run.best_value is not none else -1 }}">
+          {% if run.best_value is not none %}
+            {{ '%.4f' | format(run.best_value) }}
+            <div class="muted" style="font-size:11px">{{ run.best_metric }}</div>
+          {% else %}—{% endif %}
+        </td>
+        <td>
+          {% if run.state == 'running' and run.dashboard_url %}
+            <a class="button small" href="{{ run.dashboard_url }}" target="_blank"
+               title="This run's own live dashboard">Dashboard ↗</a>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+<p class="muted" style="font-size:12px">
+  Runs launched by hand outside these roots do not appear here — see the
+  <span class="mono">--api-port</span> follow-up in the orchestrator docs.
+</p>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Click-to-sort. Cheap, and the table is small enough that anything more
+  // would be over-engineering.
+  document.querySelectorAll('th.sortable').forEach(th => {
+    th.addEventListener('click', () => {
+      const table = document.getElementById('runs-table');
+      const tbody = table.tBodies[0];
+      const col = Number(th.dataset.col);
+      const ascending = th.dataset.dir !== 'asc';
+      th.dataset.dir = ascending ? 'asc' : 'desc';
+
+      const value = (row) => {
+        const cell = row.cells[col];
+        return cell.dataset.sort !== undefined ? cell.dataset.sort : cell.innerText.trim();
+      };
+      const rows = Array.from(tbody.rows).sort((a, b) => {
+        const [x, y] = [value(a), value(b)];
+        const [nx, ny] = [parseFloat(x), parseFloat(y)];
+        const cmp = (!isNaN(nx) && !isNaN(ny)) ? nx - ny : x.localeCompare(y);
+        return ascending ? cmp : -cmp;
+      });
+      rows.forEach(r => tbody.appendChild(r));
+    });
+  });
+
+  // Only poll when something is live.
+  if (document.querySelector('.pill.running, .pill.launching, .pill.stopping')) {
+    autoRefresh(10);
+  }
+</script>
+{% endblock %}

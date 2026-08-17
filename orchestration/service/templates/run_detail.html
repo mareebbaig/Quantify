@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% set active = 'runs' %}
+{% block title %}{{ run.run_id }} — Orchestrator{% endblock %}
+
+{% block topbar_extra %}
+  <span class="pill {{ run.state }}"><span class="dot"></span>{{ run.state }}</span>
+  {% if run.state == 'running' and run.dashboard_url %}
+    <a class="button" href="{{ run.dashboard_url }}" target="_blank">Open dashboard ↗</a>
+  {% endif %}
+  {% if entry and entry.state in ('running', 'launching') %}
+    <button class="danger" onclick="stopRun('{{ run.run_id }}')">Stop</button>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+<div id="banner" class="banner" style="display:none"></div>
+
+{% if run.reason %}
+  <div class="banner {{ 'error' if run.state in ('failed', 'crashed') else '' }}">
+    {{ run.reason }}
+  </div>
+{% endif %}
+
+{% if entry and entry.stop_stage %}
+  <div class="banner warn">
+    Stopping — currently at <strong>{{ entry.stop_stage }}</strong>.
+    {% if entry.stop_seconds_left is not none %}
+      <span class="stop-countdown" data-countdown="{{ entry.stop_seconds_left }}">
+        Escalates in {{ entry.stop_seconds_left }}s.</span>
+    {% endif %}
+    A halt waits for the current epoch to finish, so this is expected to take a while.
+  </div>
+{% endif %}
+
+<div class="panel">
+  <h2>Run</h2>
+  <dl class="kv">
+    <dt>Run ID</dt><dd>{{ run.run_id }}</dd>
+    <dt>Experiment</dt><dd>{{ run.experiment_name or '—' }}</dd>
+    <dt>Model</dt><dd>{{ run.model or '—' }}</dd>
+    <dt>Dataset</dt><dd>{{ run.dataset or '—' }}</dd>
+    <dt>Augmentation</dt><dd>{{ run.augmentation or '—' }}</dd>
+    <dt>Quantization</dt><dd>{{ run.quant or '—' }}</dd>
+    <dt>Started</dt><dd>{{ run.created_at or '—' }}</dd>
+    {% if run.finished_at %}<dt>Ended</dt><dd>{{ run.finished_at }}</dd>{% endif %}
+    {% if run.duration_s %}<dt>Duration</dt><dd>{{ '%.1f' | format(run.duration_s) }}s</dd>{% endif %}
+    <dt>Directory</dt><dd>{{ run.run_dir }}</dd>
+    {% if run.pid %}<dt>PID</dt><dd>{{ run.pid }}</dd>{% endif %}
+    {% if run.api_port %}<dt>Dashboard port</dt><dd>{{ run.api_port }}</dd>{% endif %}
+  </dl>
+</div>
+
+{% if live %}
+<div class="panel">
+  <h2>Live <span class="muted" style="font-weight:400">— proxied from this run's own dashboard</span></h2>
+  <dl class="kv">
+    <dt>Phase</dt><dd>{{ live.phase.name if live.phase else '—' }}</dd>
+    <dt>Epoch</dt><dd>{{ live.epoch }} / {{ live.total_epochs }}</dd>
+    <dt>Progress</dt><dd>{{ '%.1f%%' | format((live.epoch_progress or 0) * 100) }}</dd>
+    <dt>ETA</dt><dd>{{ '%.0fs' | format(live.eta_s) if live.eta_s else '—' }}</dd>
+    <dt>LR</dt><dd>{{ live.current_lr }}</dd>
+    <dt>Best</dt><dd>{{ live.best_metric }}</dd>
+    <dt>Paused</dt><dd>{{ live.paused }}</dd>
+    <dt>Halt requested</dt><dd>{{ live.halt_requested }}</dd>
+  </dl>
+  <p class="muted" style="font-size:12px; margin-top:10px">
+    Charts and controls live on the run's own dashboard — this page does not duplicate them.
+  </p>
+</div>
+{% endif %}
+
+{% if run.best_value is not none %}
+<div class="panel">
+  <h2>Best checkpoint</h2>
+  <dl class="kv">
+    <dt>{{ run.best_metric }}</dt><dd>{{ '%.6f' | format(run.best_value) }}</dd>
+    {% if status and status.best %}
+      <dt>Epoch</dt><dd>{{ status.best.epoch }}</dd>
+      <dt>File</dt><dd>{{ status.best.checkpoint }}</dd>
+    {% endif %}
+  </dl>
+</div>
+{% endif %}
+
+{% if run.error %}
+<div class="panel">
+  <h2>Failure</h2>
+  <dl class="kv">
+    <dt>Type</dt><dd>{{ run.error.type }}</dd>
+    <dt>Message</dt><dd>{{ run.error.message }}</dd>
+  </dl>
+  <pre style="margin-top:12px">{{ run.error.traceback }}</pre>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>Relaunch</h2>
+  <p class="muted" style="font-size:12px; margin-bottom:14px">
+    Queue a new run from this one's spec. Leave the checkpoint blank to repeat it as-is, or
+    point it at one of this run's checkpoints to continue from there.
+  </p>
+  <div class="form-grid">
+    <div style="grid-column: 1 / -1">
+      <label for="relaunch_ckpt">Start from checkpoint</label>
+      <input id="relaunch_ckpt"
+             placeholder="{{ status.best.checkpoint if status and status.best else run.run_dir + '/checkpoints/last.pt' }}">
+    </div>
+    <div><label for="relaunch_epochs">Epochs (optional)</label>
+      <input id="relaunch_epochs" type="number" min="1"></div>
+    <div><label for="relaunch_lr">Learning rate (optional)</label>
+      <input id="relaunch_lr" type="text"></div>
+  </div>
+  <button class="primary" onclick="relaunch()">Queue relaunch</button>
+</div>
+
+<details class="panel">
+  <summary style="cursor:pointer; color:var(--text-secondary)">Raw manifest and status</summary>
+  <h2 style="margin-top:14px">run.json</h2>
+  <pre>{{ manifest | tojson(indent=2) if manifest else 'no manifest — the run failed before build_run wrote one' }}</pre>
+  <h2 style="margin-top:14px">status.json</h2>
+  <pre>{{ status | tojson(indent=2) if status else 'no status marker — the run is still going, or was killed outright' }}</pre>
+</details>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  async function stopRun(runId) {
+    if (!confirm(
+      `Stop run ${runId}?\n\n` +
+      `It halts after the current epoch (final plots and best-checkpoint restore still ` +
+      `run), then escalates to SIGTERM and SIGKILL if needed.\n\nHalting is NOT resumable.`
+    )) return;
+    try {
+      await api(`/api/v1/runs/${runId}/stop`, {method: 'POST',
+        headers: {'Content-Type': 'application/json'}, body: '{}'});
+      window.location.reload();
+    } catch (err) { showError(`Stop failed: ${err.message}`); }
+  }
+
+  async function relaunch() {
+    const body = {};
+    const ckpt = document.getElementById('relaunch_ckpt').value.trim();
+    const epochs = document.getElementById('relaunch_epochs').value.trim();
+    const lr = document.getElementById('relaunch_lr').value.trim();
+    if (ckpt) body.init_checkpoint = ckpt;
+    if (epochs) body.epochs = Number(epochs);
+    if (lr) body.learning_rate = Number(lr);
+    try {
+      await api(`/api/v1/runs/{{ run.run_id }}/relaunch`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body),
+      });
+      window.location.href = '/queue';
+    } catch (err) { showError(`Relaunch failed: ${err.message}`); }
+  }
+
+  setInterval(() => {
+    document.querySelectorAll('[data-countdown]').forEach(el => {
+      let left = Math.max(0, Number(el.dataset.countdown) - 1);
+      el.dataset.countdown = left;
+      el.textContent = left > 0 ? `Escalates in ${left}s.` : 'Escalating…';
+    });
+  }, 1000);
+
+  {% if run.state in ('running',) %}autoRefresh(10);{% endif %}
+</script>
+{% endblock %}
