@@ -210,7 +210,8 @@ loop.
 ├── latest.json                      pointer to the newest run
 └── runs/<run_id>/                   the run directory
     ├── run.json                     manifest: full spec + bound port + pid
-    ├── run.log                      teed stdout/stderr (CLI runs)
+    ├── status.json                  terminal status — written when the run ENDS
+    ├── run.log                      teed stdout/stderr (CLI and launched runs)
     ├── checkpoints/                 top-K pool, last.pt, checkpoint_index.json
     ├── plots/
     └── logs/<experiment_name>/<run_id>/   hparams.json, metrics.csv, api_metrics.jsonl
@@ -232,6 +233,149 @@ Two consequences:
 - **`logs/` nests `run_id` twice** (once from the run directory, once from
   `ExperimentLogger.run_dir`, `logger.py:60`). Cosmetically redundant, but it
   leaves the logger untouched. Worth flattening in the architecture pass.
+
+## Launching from a spec file
+
+`build_run` constructs a run in-process. To start one as its own process —
+which is what an orchestrator does — use the launcher:
+
+```bash
+python -m orchestration.launch --spec /path/to/run.json
+```
+
+One flag; the spec file is the entire interface. It does
+`RunSpec.read_json` → `build_run(spec, tee_stdout=True)` → `fit()`, wrapped in
+the lifecycle handling below. Also importable, for an orchestrator that wants
+to run something in-process:
+
+```python
+from orchestration.launch import launch_from_spec_file
+tracker = launch_from_spec_file("/path/to/run.json")
+```
+
+Two things the launcher does that `build_run` alone does not:
+
+- **Forces `tee_stdout=True`.** `build_run` defaults it to `False` so a library
+  call does not hijack the process's streams, but a launched run must leave a
+  log: `setup_output_tee` (`run_utils.py:69`) is what creates
+  `<run_dir>/run.log`, and since the launcher re-raises, an exception's
+  traceback is teed there as well as recorded in `status.json`.
+- **Writes the terminal-status marker**, below.
+
+The CLI (`examples/train_imagenet_qat.py`) is *not* a substitute: it hardcodes
+`dataset="imagenet"` (`:834`) and has no flags for `augmentation_overrides` or
+`allow_untested_pair`, so a spec cannot round-trip through argv.
+
+## Terminal status (`status.json`)
+
+### Why it exists
+
+`QATTrainerV2.fit()` has no `try/finally`, and `_post_training()`
+(`trainer_v2.py:950`) is called at `:652` on the normal path only. So before
+this, a crashed run and a cleanly finished run were **byte-identical on disk** —
+a manifest, a partial `metrics.csv`, and a dead pid. Nothing could tell them
+apart once the process was gone.
+
+The launcher closes that by wrapping `build_run` **and** `fit()` in
+try/except and writing a marker on every exit path. **`trainer_v2.py` is not
+modified**: the launcher owns lifecycle, the trainer stays a training loop.
+
+### Schema
+
+```json
+{
+  "status": "finished",
+  "phase": "train",
+  "run_id": "2026-08-17_174444",
+  "experiment_name": "resnet18_W8_A8_B8",
+  "started_at": "2026-08-17T17:44:44",
+  "finished_at": "2026-08-17T19:02:11",
+  "duration_s": 4647.3,
+  "pid": 31427,
+  "run_dir": "/abs/path/.../runs/2026-08-17_174444",
+  "epochs_completed": 80,
+  "best": {
+    "metric": "val_acc", "value": 0.7213, "epoch": 74,
+    "checkpoint": "/abs/.../checkpoints/..._epoch0074_metric0.721300.pt"
+  },
+  "metrics": { "total_epochs": 165, "best_val_acc": 0.7213, "final_val_acc": 0.7198 },
+  "error": null
+}
+```
+
+| Field | Notes |
+|---|---|
+| `status` | `finished` \| `failed` \| `interrupted` (Ctrl-C). No `running` value exists — the file is written once, at the end |
+| `phase` | Where it ended: `load` (reading/validating the spec), `build` (`build_run`), `train` (`fit`) |
+| `epochs_completed` | Distinct epochs that produced metrics. **Use this, not `metrics.total_epochs`** — `MetricsTracker.summary()` counts *snapshots*, and V2 commits one per phase plus a baseline pass, so 2 epochs reports 5 |
+| `best` | Best checkpoint by the monitored metric; `null` if none was saved. Cheap in-process (`checkpointing.py:216`); from outside it would need a two-file join |
+| `error` | `null` on success; otherwise `{type, message, traceback}` |
+
+Every optional field is best-effort: collection runs while an exception is in
+flight, so a failed lookup yields `null` rather than masking the real error.
+Likewise a failure to *write* the marker is reported on stderr and swallowed —
+turning "CUDA out of memory" into "permission denied" would help nobody.
+
+### Where it lands
+
+Normally `<run_dir>/status.json`. But a spec can fail before a run directory is
+known, so the path is resolved by a cascade
+(`launch.py:resolve_status_path`) — the earliest point at which
+`<run_dir>` is *guaranteed* is after the `RunSpec` is constructed, since
+`run_dir` derives from `output_dir` and `run_id`, which `__post_init__` fills:
+
+| Situation | Marker goes to |
+|---|---|
+| Spec constructed (covers all build and train failures) | `<run_dir>/status.json` |
+| JSON parsed but validation failed | `<output_dir>/runs/<run_id>/status.json`, read straight from the raw dict |
+| File missing or malformed JSON | `<spec_path>.status.json` |
+
+The orchestrator writes the spec file, so it can always compute every
+candidate.
+
+### Ordering vs. the existing finalization
+
+On success: `fit()` → `_post_training()` → `mark_finished()`
+(`collector.py:141`, appends a `"training finished"` event to
+`api_metrics.jsonl` and closes it) → `fit()` returns → **then** `status.json`.
+Strictly sequential and single-threaded, so no race and no double-reporting:
+the jsonl event feeds the live API's history, `status.json` is the post-mortem
+record.
+
+On failure `_post_training()` never runs, so no jsonl event is written at all —
+the marker is the only record. Note also that `mark_finished()`'s event only
+exists when the run had `api_port` set (the collector is created only then,
+`trainer_v2.py:251`), whereas `status.json` is written unconditionally. **The
+marker is the more reliable signal; key on it.**
+
+A SIGKILL — or an unhandled SIGTERM, since no signal handler is installed —
+leaves no marker. That is intentional and not worth defending against; see the
+consumption rules below.
+
+## How the orchestrator will consume this
+
+Not built yet (next slice), but the contract it depends on:
+
+**Enumerate runs by directory, NOT by globbing `run.json`.** The manifest is
+written at the *end* of `build_run`, so a run that fails during build has a
+`status.json` and **no `run.json`** — precisely the failures you least want to
+lose. Glob `<root>/*/runs/*/` and read whichever files are present.
+
+Classification, given a run directory:
+
+| `status.json` | pid alive | Conclusion |
+|---|---|---|
+| present | — | Authoritative. Use its `status` |
+| absent | yes | Running. Live detail from the run's own `/api/v1/status` |
+| absent | no | **Crashed** (SIGKILL, power loss, OOM-killer) |
+
+Liveness needs `pid` from `run.json`; combine with `created_at` to blunt pid
+reuse. `psutil` is not a dependency — `os.kill(pid, 0)` suffices on Linux.
+
+Deliberately still absent, for the next slice: the run queue, the listing
+service, liveness classification, subprocess supervision, the UI, stale-manifest
+cleanup, and the `--api-port` CLI wire-up (unnecessary for launched runs, since
+`api_port` is a spec field and `build_run` reads the bound port back).
 
 `training_harness/config_v2.py` is **not** modified — direct `TrainerConfigV2`
 users (`examples/dashboard_demo.py`, `examples/mnist_qat_v2.py`) keep their
@@ -322,6 +466,7 @@ batch-level half (mixup / cutmix / smoothing / random erasing) is still
 | `tests/test_run_spec.py` | validation rejections, JSON/dict round-trip identity, normalization pair resolution, model quant contracts |
 | `tests/test_run_builder.py` | MNIST end-to-end: build → fit, per-run dirs, manifest, bound port, live dashboard, checkpoint provenance |
 | `tests/test_cli_spec_regression.py` | **strict** field-by-field equality between the adapter's config and a verbatim copy of the pre-refactor `main()` construction, across 14 command lines |
+| `tests/test_launch.py` | the launcher: status-path cascade, success/failure/build-failure/invalid-spec/malformed-spec markers, and a subprocess test asserting a failure produces **both** a nonzero exit code and an on-disk marker |
 
 The regression guard is the important one. `_legacy_config_from_args` in
 `tests/test_cli_spec_regression.py` is an intentional verbatim copy of the old
