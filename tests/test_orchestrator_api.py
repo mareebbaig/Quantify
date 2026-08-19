@@ -293,3 +293,71 @@ def test_launch_page_offers_only_valid_pairs(client):
     first place rather than rejected on submit."""
     body = client.get("/launch").data.decode()
     assert '"mnist_cnn": ["mnist"]' in body.replace("'", '"')
+
+
+# ---------------------------------------------------------------------------
+# Opening a run's dashboard
+# ---------------------------------------------------------------------------
+
+def test_api_base_is_the_origin_not_the_api_path(app):
+    """The manifest's dashboard_url is the API *base path* (.../api/v1/), which
+    is not a page and cannot be handed to the dashboard either -- it appends
+    /api/v1/... itself. api_base is the bare origin."""
+    root = app.config["_ROOT"]
+    seed_run(root, "based", manifest=a_manifest(
+        "based", pid=os.getpid(), api_port=65047,
+        dashboard_url="http://127.0.0.1:65047/api/v1/"))
+
+    from orchestration.service import store
+    record = store.find_run(app.config["ROOTS"], "based")
+
+    assert record.api_base == "http://127.0.0.1:65047"
+    assert not record.api_base.endswith("/api/v1/")
+
+
+def test_open_dashboard_redirects_to_the_page_with_the_run_as_its_api(app, client):
+    """The regression this test exists for: the button used to link straight at
+    the JSON API base, which 404s in a browser."""
+    root = app.config["_ROOT"]
+    seed_run(root, "live", manifest=a_manifest("live", pid=os.getpid(), api_port=65047))
+
+    response = client.get("/runs/live/dashboard")
+
+    assert response.status_code == 302
+    location = response.headers["Location"]
+    assert location == "/dashboard/index.html?api=http://127.0.0.1:65047"
+    # It must point at a page, not at the run's API.
+    assert not location.startswith("http://127.0.0.1:65047")
+
+
+def test_dashboard_page_is_served_by_the_orchestrator(client):
+    """Serving it here is what removes the second server and the pasted port."""
+    response = client.get("/dashboard/index.html")
+
+    assert response.status_code == 200
+    body = response.data.decode("utf-8", "replace")
+    assert 'URLSearchParams(location.search).get("api")' in body
+
+
+def test_open_dashboard_explains_itself_when_there_is_no_port(app, client):
+    root = app.config["_ROOT"]
+    seed_run(root, "noport", manifest=a_manifest("noport", pid=os.getpid(), api_port=None))
+
+    response = client.get("/runs/noport/dashboard")
+
+    assert response.status_code == 409
+    assert b"no live dashboard" in response.data
+
+
+def test_open_dashboard_for_a_finished_run_explains_itself(app, client):
+    root = app.config["_ROOT"]
+    seed_run(root, "done", manifest=a_manifest("done"), status={"status": "finished"})
+
+    response = client.get("/runs/done/dashboard")
+
+    assert response.status_code == 409
+    assert b"only exists while the training process is alive" in response.data
+
+
+def test_open_dashboard_for_an_unknown_run_is_404(client):
+    assert client.get("/runs/ghost/dashboard").status_code == 404

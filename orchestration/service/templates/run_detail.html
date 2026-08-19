@@ -4,8 +4,8 @@
 
 {% block topbar_extra %}
   <span class="pill {{ run.state }}"><span class="dot"></span>{{ run.state }}</span>
-  {% if run.state == 'running' and run.dashboard_url %}
-    <a class="button" href="{{ run.dashboard_url }}" target="_blank">Open dashboard ↗</a>
+  {% if run.state == 'running' and run.api_base %}
+    <a class="button" href="/runs/{{ run.run_id }}/dashboard" target="_blank">Open dashboard ↗</a>
   {% endif %}
   {% if entry and entry.state in ('running', 'launching') %}
     <button class="danger" onclick="stopRun('{{ run.run_id }}')">Stop</button>

@@ -205,7 +205,30 @@ worker.
 | POST | `/api/v1/queue` | validate a spec → enqueue |
 | DELETE | `/api/v1/queue/<entry_id>` | cancel a pending entry |
 
-UI routes: `/` (runs), `/queue`, `/launch`, `/runs/<id>`.
+UI routes: `/` (runs), `/queue`, `/launch`, `/runs/<id>`,
+`/runs/<id>/dashboard` (opens the training dashboard for that run),
+`/dashboard/<file>` (serves the dashboard page itself).
+
+### Opening a run's dashboard
+
+The orchestrator **serves the training dashboard** and opens it already pointed
+at the run you clicked, so there is no second server to start and no port to
+copy. Two details make that work, and getting either wrong looks like "the
+dashboard cannot connect":
+
+* The manifest's `dashboard_url` is the API **base path**
+  (`http://host:port/api/v1/`). There is no page there -- a browser gets a 404.
+  Use `RunRecord.api_base`, the bare origin, for anything user-facing.
+* `dashboard/index.html` builds its requests as `apiBase + "/api/v1/status"`,
+  so it must receive the origin only. Handing it `dashboard_url` yields
+  `/api/v1//api/v1/status`.
+
+Cross-origin fetches work because each run's API sends
+`Access-Control-Allow-Origin: *` (`training_harness/api/server.py`) -- which is
+precisely why that header was there.
+
+A run with no bound port (finished, or the bind failed) gets an explanatory
+page rather than a broken link.
 
 ### Validation, and one thing RunSpec does *not* check
 

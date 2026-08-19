@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request, send_from_directory
 
 from ..registry import AUGMENTATIONS, DATASETS, MODELS
 from ..run_spec import RunSpec, RunSpecError
@@ -27,6 +27,10 @@ from .launcher import REPO_ROOT
 from .queue import DEFAULT_HALT_TIMEOUT_S, RunQueue
 
 DEFAULT_ROOT = os.path.join(REPO_ROOT, "output")
+# The per-run training dashboard is a self-contained static page. The
+# orchestrator serves it directly so opening a run's dashboard needs no second
+# process and no hand-copied port -- see _register_dashboard.
+DASHBOARD_DIR = os.path.join(REPO_ROOT, "dashboard")
 DEFAULT_STATE_DIR = os.path.join(DEFAULT_ROOT, ".orchestrator")
 
 
@@ -56,6 +60,7 @@ def create_app(
         app.config["QUEUE"].start()
 
     _register_api(app)
+    _register_dashboard(app)
     _register_ui(app)
     return app
 
@@ -258,6 +263,47 @@ def _register_api(app: Flask) -> None:
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 409
         return jsonify(entry.summary)
+
+
+# ---------------------------------------------------------------------------
+# The per-run training dashboard
+# ---------------------------------------------------------------------------
+
+def _register_dashboard(app: Flask) -> None:
+    """Serve the training dashboard and open it pointed at a given run.
+
+    Without this, "open the dashboard" meant starting a second server
+    (dashboard/serve.py) and pasting in the run's port by hand -- and the port
+    is OS-assigned, so it changes every run. Serving the page here makes the
+    link in the run list just work.
+
+    Two things had to line up, and neither is obvious:
+
+      * The manifest's ``dashboard_url`` is the API *base path*
+        (``http://host:port/api/v1/``). There is no page there, so opening it
+        in a browser 404s. The page lives here; only its data comes from the run.
+      * dashboard/index.html builds requests as ``apiBase + "/api/v1/status"``,
+        so it must be handed the bare origin (``http://host:port``) -- passing
+        dashboard_url would produce ``/api/v1//api/v1/status``.
+
+    Cross-origin works because each run's API sets Access-Control-Allow-Origin:*
+    (training_harness/api/server.py), which is exactly why that was wide open.
+    """
+
+    @app.get("/dashboard/<path:filename>")
+    def dashboard_static(filename):
+        return send_from_directory(DASHBOARD_DIR, filename)
+
+    @app.get("/runs/<run_id>/dashboard")
+    def open_dashboard(run_id):
+        record = _find(app, run_id)
+        if record is None:
+            return render_template("not_found.html", run_id=run_id), 404
+        if not record.api_base:
+            return render_template(
+                "no_dashboard.html", run=record.to_dict(),
+            ), 409
+        return redirect(f"/dashboard/index.html?api={record.api_base}")
 
 
 # ---------------------------------------------------------------------------

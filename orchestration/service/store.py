@@ -85,6 +85,21 @@ class RunRecord:
     def sort_key(self) -> str:
         return self.created_at or ""
 
+    @property
+    def api_base(self) -> Optional[str]:
+        """Origin of this run's monitoring API, e.g. http://127.0.0.1:65047.
+
+        Note this is NOT ``dashboard_url``, which the manifest writes as the API
+        *base path* (``.../api/v1/``). The dashboard page appends ``/api/v1/...``
+        to whatever base it is given, so handing it dashboard_url would produce
+        ``/api/v1//api/v1/status``. Opening dashboard_url in a browser is also
+        useless -- there is no page there, only JSON endpoints beneath it.
+        """
+        if not self.api_port:
+            return None
+        host = (self.manifest or {}).get("api_host") or "127.0.0.1"
+        return f"http://{host}:{self.api_port}"
+
     def to_dict(self) -> Dict[str, Any]:
         data = {
             "run_id": self.run_id,
@@ -106,6 +121,7 @@ class RunRecord:
             "pid": self.pid,
             "api_port": self.api_port,
             "dashboard_url": self.dashboard_url,
+            "api_base": self.api_base,
             "error": self.error,
             "has_manifest": self.has_manifest,
             "has_status": self.has_status,

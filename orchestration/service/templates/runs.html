@@ -56,8 +56,8 @@
           {% else %}—{% endif %}
         </td>
         <td>
-          {% if run.state == 'running' and run.dashboard_url %}
-            <a class="button small" href="{{ run.dashboard_url }}" target="_blank"
+          {% if run.state == 'running' and run.api_base %}
+            <a class="button small" href="/runs/{{ run.run_id }}/dashboard" target="_blank"
                title="This run's own live dashboard">Dashboard ↗</a>
           {% endif %}
         </td>
