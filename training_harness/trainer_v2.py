@@ -554,6 +554,11 @@ class QATTrainerV2:
                                 epoch=epoch, metric_value=_mv, model=self.model,
                                 optimizer=self.optimizer, scheduler=self.scheduler,
                                 metrics_dict=all_metrics, config_dict=self.config.to_dict(),
+                                # Same provenance as the primary pool (run spec,
+                                # fuse_bn, EMA state) — a checkpoint reloaded from
+                                # a secondary pool must be as self-describing as
+                                # one from the primary.
+                                extra=_ckpt_extra or None,
                             )
 
                 # Breakdown detection: check for catastrophic accuracy collapse

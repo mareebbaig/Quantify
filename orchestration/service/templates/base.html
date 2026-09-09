@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Orchestrator{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='orchestrator.css') }}">
+</head>
+<body>
+  <div class="topbar">
+    <h1>Quantify Orchestrator</h1>
+    <nav class="nav">
+      <a href="/" class="{{ 'active' if active == 'runs' }}">Runs</a>
+      <a href="/queue" class="{{ 'active' if active == 'queue' }}">Queue</a>
+      <a href="/launch" class="{{ 'active' if active == 'launch' }}">Launch</a>
+    </nav>
+    <span class="spacer"></span>
+    {% block topbar_extra %}{% endblock %}
+  </div>
+
+  {% block content %}{% endblock %}
+
+  <script>
+    // Shared helpers. Deliberately vanilla: this UI lists and links, the
+    // per-run dashboard does the heavy visualisation.
+    function fmtPill(state) {
+      return `<span class="pill ${state}"><span class="dot"></span>${state}</span>`;
+    }
+
+    async function api(path, options) {
+      const response = await fetch(path, options);
+      let body = null;
+      try { body = await response.json(); } catch (e) { /* no body */ }
+      if (!response.ok) {
+        throw new Error((body && body.error) || `HTTP ${response.status}`);
+      }
+      return body;
+    }
+
+    function showError(message) {
+      const el = document.getElementById('banner');
+      if (!el) { alert(message); return; }
+      el.textContent = message;
+      el.className = 'banner error';
+      el.style.display = 'block';
+    }
+
+    // Auto-refresh, paused while a dialog or a form field has focus so it
+    // never yanks the page out from under you mid-edit.
+    function autoRefresh(seconds) {
+      setInterval(() => {
+        const tag = document.activeElement && document.activeElement.tagName;
+        if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+        window.location.reload();
+      }, seconds * 1000);
+    }
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

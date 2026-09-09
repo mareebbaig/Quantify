@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% set active = 'launch' %}
+{% block title %}Launch — Orchestrator{% endblock %}
+
+{% block content %}
+<div id="banner" class="banner" style="display:none"></div>
+
+<div class="panel">
+  <h2>Launch a run</h2>
+  <p class="muted" style="font-size:12px; margin-bottom:16px">
+    The run is added to the queue and starts when the GPU is free. Ingredient names come
+    from the registry, and the spec is validated exactly as a hand-written one would be —
+    including the refusal of untested (model, dataset) pairs.
+  </p>
+
+  <form id="launch-form" onsubmit="submitLaunch(event)">
+    <div class="form-grid">
+      <div>
+        <label for="model">Model</label>
+        <select id="model" name="model" onchange="syncDatasets()">
+          {% for name in models %}<option value="{{ name }}">{{ name }}</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="dataset">Dataset</label>
+        <select id="dataset" name="dataset" onchange="syncAugmentations()">
+          {% for name in datasets %}<option value="{{ name }}">{{ name }}</option>{% endfor %}
+        </select>
+        <div class="field-hint">Only pairs the model is known-good on are offered.</div>
+      </div>
+      <div>
+        <label for="augmentation">Augmentation</label>
+        <select id="augmentation" name="augmentation"></select>
+      </div>
+      <div>
+        <label for="data_dir">Data directory</label>
+        <input id="data_dir" name="data_dir" placeholder="blank = env var or default">
+        <div class="field-hint">ImageNet needs one; MNIST downloads.</div>
+      </div>
+    </div>
+
+    <div class="form-grid">
+      <div><label for="epochs">Epochs</label>
+        <input id="epochs" type="number" value="60" min="1"></div>
+      <div><label for="batch_size">Batch size</label>
+        <input id="batch_size" type="number" value="64" min="1"></div>
+      <div><label for="learning_rate">Learning rate</label>
+        <input id="learning_rate" type="text" value="1e-3"></div>
+      <div><label for="float_warmup_epochs">Float warmup epochs</label>
+        <input id="float_warmup_epochs" type="number" value="10" min="0"></div>
+    </div>
+
+    <div class="form-grid">
+      <div><label for="weight_bits">Weight bits</label>
+        <input id="weight_bits" type="number" value="8" min="1" max="32"></div>
+      <div><label for="act_bits">Activation bits</label>
+        <input id="act_bits" type="number" value="8" min="1" max="32"></div>
+      <div><label for="bias_bits">Bias bits</label>
+        <input id="bias_bits" type="number" value="8" min="1" max="32"></div>
+      <div><label for="lr_schedule">LR schedule</label>
+        <select id="lr_schedule">
+          <option value="plateau">plateau</option>
+          <option value="cosine">cosine</option>
+          <option value="none">none</option>
+        </select></div>
+    </div>
+
+    <div class="form-grid">
+      <div style="grid-column: 1 / -1">
+        <label for="init_checkpoint">Start from checkpoint (optional)</label>
+        <input id="init_checkpoint" placeholder="/abs/path/to/checkpoint.pt">
+        <div class="field-hint">
+          Weights are loaded with calibration state preserved. To continue a previous run,
+          open it and use Relaunch instead — that carries its whole spec across.
+        </div>
+      </div>
+      <div style="grid-column: 1 / -1">
+        <label for="experiment_name">Experiment name (optional)</label>
+        <input id="experiment_name" placeholder="auto: model_W8_A8_B8">
+      </div>
+    </div>
+
+    <button type="submit" class="primary">Add to queue</button>
+    <a class="button" href="/queue">View queue</a>
+  </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const MODEL_DATASETS = {{ model_datasets | tojson }};
+  const DATASET_AUGS = {{ dataset_augmentations | tojson }};
+
+  // The registry knows which datasets each model has actually been run on;
+  // offering only those keeps the untested-pair refusal from being a surprise
+  // at submit time.
+  function syncDatasets() {
+    const model = document.getElementById('model').value;
+    const select = document.getElementById('dataset');
+    const allowed = MODEL_DATASETS[model] || [];
+    select.innerHTML = '';
+    allowed.forEach(name => select.add(new Option(name, name)));
+    syncAugmentations();
+  }
+
+  function syncAugmentations() {
+    const dataset = document.getElementById('dataset').value;
+    const select = document.getElementById('augmentation');
+    select.innerHTML = '';
+    (DATASET_AUGS[dataset] || []).forEach(name => select.add(new Option(name, name)));
+  }
+
+  function numeric(id) {
+    const raw = document.getElementById(id).value.trim();
+    return raw === '' ? null : Number(raw);
+  }
+  function text(id) {
+    const raw = document.getElementById(id).value.trim();
+    return raw === '' ? null : raw;
+  }
+
+  async function submitLaunch(event) {
+    event.preventDefault();
+    const spec = {
+      model: document.getElementById('model').value,
+      dataset: document.getElementById('dataset').value,
+      augmentation: document.getElementById('augmentation').value,
+      data_dir: text('data_dir'),
+      init_checkpoint: text('init_checkpoint'),
+      experiment_name: text('experiment_name'),
+      quant: {
+        weight_bits: numeric('weight_bits'),
+        act_bits: numeric('act_bits'),
+        bias_bits: numeric('bias_bits'),
+      },
+      lr_schedule: {kind: document.getElementById('lr_schedule').value},
+      training: {
+        epochs: numeric('epochs'),
+        batch_size: numeric('batch_size'),
+        learning_rate: numeric('learning_rate'),
+        qat: {float_warmup_epochs: numeric('float_warmup_epochs')},
+      },
+    };
+    try {
+      await api('/api/v1/queue', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(spec),
+      });
+      window.location.href = '/queue';
+    } catch (err) {
+      showError(`Could not queue the run: ${err.message}`);
+    }
+  }
+
+  syncDatasets();
+</script>
+{% endblock %}

@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% set active = 'runs' %}
+{% block title %}Not found — Orchestrator{% endblock %}
+
+{% block content %}
+<div class="panel">
+  <div class="empty">
+    No run <span class="mono">{{ run_id }}</span> under the configured roots.<br>
+    It may live outside them — start the service with an extra
+    <span class="mono">--root</span>.
+    <div style="margin-top:16px"><a class="button" href="/">Back to runs</a></div>
+  </div>
+</div>
+{% endblock %}

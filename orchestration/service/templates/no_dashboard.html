@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% set active = 'runs' %}
+{% block title %}No dashboard — Orchestrator{% endblock %}
+
+{% block content %}
+<div class="panel">
+  <div class="empty">
+    <p>Run <span class="mono">{{ run.run_id }}</span> has no live dashboard.</p>
+    <p style="margin-top:10px">
+      {% if run.state != 'running' %}
+        It is <span class="pill {{ run.state }}"><span class="dot"></span>{{ run.state }}</span>,
+        and the dashboard only exists while the training process is alive.
+        Its recorded metrics are on the run detail page.
+      {% else %}
+        It is running, but bound no monitoring port — either it was started without
+        <span class="mono">api_port</span>, or the bind failed and training carried on
+        without one.
+      {% endif %}
+    </p>
+    <div style="margin-top:16px">
+      <a class="button" href="/runs/{{ run.run_id }}">Run details</a>
+      <a class="button" href="/">All runs</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% set active = 'queue' %}
+{% block title %}Queue — Orchestrator{% endblock %}
+
+{% block content %}
+<div id="banner" class="banner" style="display:none"></div>
+
+<div class="panel">
+  <h2>Running now</h2>
+  {% if not queue.running %}
+    <div class="empty">Nothing running. The next queued run starts automatically.</div>
+  {% else %}
+    {% for entry in queue.running %}
+    <table>
+      <tbody>
+        <tr>
+          <td style="width:120px">
+            <span class="pill {{ entry.state }}"><span class="dot"></span>{{ entry.state }}</span>
+          </td>
+          <td>
+            <a href="/runs/{{ entry.run_id }}" class="mono">{{ entry.run_id }}</a>
+            <div class="muted" style="font-size:11px">
+              {{ entry.model }} / {{ entry.dataset }} ·
+              W{{ entry.weight_bits }} A{{ entry.act_bits }} B{{ entry.bias_bits }} ·
+              {{ entry.epochs }} epochs
+              {% if entry.adopted %} · <span title="Picked back up after an orchestrator restart">adopted</span>{% endif %}
+            </div>
+            {% if entry.note %}<div class="muted" style="font-size:11px">{{ entry.note }}</div>{% endif %}
+          </td>
+          <td class="mono muted">pid {{ entry.pid or '—' }}</td>
+          <td>
+            {% if entry.stop_stage %}
+              <span class="pill stopping"><span class="dot"></span>{{ entry.stop_stage }}</span>
+              {% if entry.stop_seconds_left is not none %}
+                <div class="muted stop-countdown" style="font-size:11px"
+                     data-countdown="{{ entry.stop_seconds_left }}">
+                  escalates in {{ entry.stop_seconds_left }}s
+                </div>
+              {% endif %}
+            {% endif %}
+          </td>
+          <td style="text-align:right; white-space:nowrap">
+            {% if entry.api_port %}
+              <a class="button small" target="_blank"
+                 href="http://127.0.0.1:{{ entry.api_port }}/api/v1/status">API ↗</a>
+            {% endif %}
+            {% if not entry.stop_stage %}
+              <button class="small danger" onclick="stopRun('{{ entry.run_id }}')">Stop</button>
+            {% endif %}
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    {% endfor %}
+    <p class="muted" style="font-size:12px; margin-top:10px">
+      Stop is graceful first: the run halts after its current epoch, so final plots and the
+      best-checkpoint restore still happen. On ImageNet an epoch is minutes — a slow stop is
+      not a hang. It escalates to SIGTERM, then SIGKILL, and the countdown shows when.
+      Note pause is not stop: a paused run still holds the GPU and keeps the worker busy.
+    </p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Pending ({{ queue.pending | length }})</h2>
+  {% if not queue.pending %}
+    <div class="empty">Queue is empty. <a href="/launch">Launch a run</a>.</div>
+  {% else %}
+  <table>
+    <thead>
+      <tr><th>#</th><th>Run</th><th>Model</th><th>Dataset</th><th>Epochs</th>
+          <th>Queued</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for entry in queue.pending %}
+      <tr>
+        <td class="num muted">{{ loop.index }}</td>
+        <td class="mono">{{ entry.experiment_name or entry.run_id }}</td>
+        <td>{{ entry.model }}</td>
+        <td>{{ entry.dataset }}</td>
+        <td class="num">{{ entry.epochs }}</td>
+        <td class="mono muted">{{ entry.enqueued_at }}</td>
+        <td style="text-align:right">
+          <button class="small" onclick="cancelEntry('{{ entry.entry_id }}')">Cancel</button>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Recent history</h2>
+  {% if not queue.history %}
+    <div class="empty">No finished runs in this queue yet.</div>
+  {% else %}
+  <table>
+    <thead>
+      <tr><th>Run</th><th>Result</th><th>Model</th><th>Started</th><th>Ended</th>
+          <th>Exit</th><th>Note</th></tr>
+    </thead>
+    <tbody>
+      {% for entry in queue.history %}
+      <tr>
+        <td>
+          {% if entry.run_id %}<a href="/runs/{{ entry.run_id }}" class="mono">{{ entry.run_id }}</a>
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
+        <td><span class="pill {{ entry.state }}"><span class="dot"></span>{{ entry.state }}</span></td>
+        <td>{{ entry.model }}</td>
+        <td class="mono muted">{{ entry.started_at or '—' }}</td>
+        <td class="mono muted">{{ entry.ended_at or '—' }}</td>
+        <td class="num mono">{{ entry.returncode if entry.returncode is not none else '—' }}</td>
+        <td class="muted" style="font-size:11px">{{ entry.note or entry.error or '' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  async function stopRun(runId) {
+    if (!confirm(
+      `Stop run ${runId}?\n\n` +
+      `It will halt after the current epoch finishes (final plots and the ` +
+      `best-checkpoint restore still run). If that does not land in time it ` +
+      `escalates to SIGTERM, then SIGKILL, which skip finalisation.\n\n` +
+      `Halting is NOT resumable.`)) return;
+    try {
+      await api(`/api/v1/runs/${runId}/stop`, {method: 'POST',
+        headers: {'Content-Type': 'application/json'}, body: '{}'});
+      window.location.reload();
+    } catch (err) { showError(`Stop failed: ${err.message}`); }
+  }
+
+  async function cancelEntry(entryId) {
+    if (!confirm('Remove this run from the queue? It has not started yet.')) return;
+    try {
+      await api(`/api/v1/queue/${entryId}`, {method: 'DELETE'});
+      window.location.reload();
+    } catch (err) { showError(`Cancel failed: ${err.message}`); }
+  }
+
+  // Tick the escalation countdown between refreshes so a slow halt visibly
+  // progresses rather than looking frozen.
+  setInterval(() => {
+    document.querySelectorAll('[data-countdown]').forEach(el => {
+      let left = Math.max(0, Number(el.dataset.countdown) - 1);
+      el.dataset.countdown = left;
+      el.textContent = left > 0 ? `escalates in ${left}s` : 'escalating…';
+    });
+  }, 1000);
+
+  autoRefresh(5);
+</script>
+{% endblock %}
